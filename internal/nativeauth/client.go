@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -27,6 +28,7 @@ type Error struct {
 	Number     int
 	RetryAfter time.Duration
 	Submitted  bool
+	Diagnostic string
 }
 
 func (e *Error) Error() string     { return e.Code }
@@ -279,7 +281,22 @@ func (c *Client) request(ctx context.Context, route string, params map[string]an
 	}
 	response, err := c.http.Do(req)
 	if err != nil {
-		return nil, &Error{Code: "native_transport_unknown", Submitted: true}
+		var native *Error
+		if errors.As(err, &native) {
+			// These errors originate only in the pre-connect address gate.
+			switch native.Code {
+			case "native_origin_rejected", "native_dns_failed", "native_dns_fake_ip", "native_dns_fallback_failed":
+				return nil, native
+			}
+		}
+		diagnostic := "network_unavailable"
+		var network net.Error
+		if errors.As(err, &network) && network.Timeout() {
+			diagnostic = "network_timeout"
+		} else if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			diagnostic = "connection_closed"
+		}
+		return nil, &Error{Code: "native_transport_unknown", Submitted: true, Diagnostic: diagnostic}
 	}
 	defer response.Body.Close()
 	if response.StatusCode == 401 {

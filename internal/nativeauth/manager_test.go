@@ -69,12 +69,13 @@ func TestDeploymentAndPublicNetwork(t *testing.T) {
 }
 
 type fakeClient struct {
-	safe    atomic.Bool
-	block   bool
-	unknown bool
-	device  bool
-	params  map[string]any
-	calls   atomic.Int32
+	safe     atomic.Bool
+	block    bool
+	unknown  bool
+	loginErr error
+	device   bool
+	params   map[string]any
+	calls    atomic.Int32
 }
 
 func (f *fakeClient) Request(_ context.Context, route string, params map[string]any) (map[string]json.RawMessage, error) {
@@ -101,7 +102,43 @@ func (f *fakeClient) Login(ctx context.Context, in map[string]any) error {
 	if f.unknown {
 		return &Error{Code: "native_transport_unknown", Submitted: true}
 	}
+	if f.loginErr != nil {
+		return f.loginErr
+	}
 	return nil
+}
+
+func TestNetworkErrorsReachViewWithoutTreatingPreconnectAsUnknown(t *testing.T) {
+	for _, code := range []string{"native_origin_rejected", "native_dns_failed", "native_dns_fake_ip", "native_dns_fallback_failed"} {
+		m := NewManager()
+		f := &fakeClient{loginErr: rejection(code)}
+		m.Factory = func(Deployment) (AuthClient, error) { return f, nil }
+		view, err := m.Start("owner", "account", syntheticDeployment(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input := Input{Action: "password", Account: "synthetic", Password: "not-real", Captcha: "synthetic-human"}
+		if _, err = m.Action("owner", "account", view.ID, input); err != nil {
+			t.Fatal(err)
+		}
+		view = waitState(t, m, view.ID, "failed")
+		if view.Error != code || view.Diagnostic != "" || f.calls.Load() != 1 {
+			t.Fatal("pre-connect result was lost or automatically retried")
+		}
+		f.loginErr = &Error{Code: "native_transport_unknown", Submitted: true, Diagnostic: "connection_closed"}
+		view, err = m.Action("owner", "account", view.ID, input)
+		if err != nil || view.Error != "" || view.Diagnostic != "" || view.ProviderCode != 0 {
+			t.Fatal("old error survived explicit resubmission", err)
+		}
+		view = waitState(t, m, view.ID, "unknown")
+		if view.Diagnostic != "connection_closed" || view.Error != "native_transport_unknown" {
+			t.Fatal("safe transport diagnostic not propagated")
+		}
+		if _, err = m.Action("owner", "account", view.ID, input); err == nil || f.calls.Load() != 2 {
+			t.Fatal("unknown result resubmitted")
+		}
+		m.Close()
+	}
 }
 
 func TestDeviceChallengeAndResendPreserveOriginalKey(t *testing.T) {

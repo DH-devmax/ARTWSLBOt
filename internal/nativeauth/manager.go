@@ -31,6 +31,7 @@ type View struct {
 	Status            string    `json:"status"`
 	Error             string    `json:"error"`
 	ProviderCode      int       `json:"provider_code,omitempty"`
+	Diagnostic        string    `json:"diagnostic,omitempty"`
 	CaptchaID         string    `json:"captcha_id"`
 	ExpiresAt         time.Time `json:"expires_at"`
 	RetryAt           time.Time `json:"retry_at"`
@@ -338,6 +339,7 @@ func (m *Manager) Action(owner, account, id string, in Input) (View, error) {
 	}
 	tx.attempts++
 	tx.busy, tx.view.Status, tx.view.Error, tx.view.ProviderCode = true, "working", "", 0
+	tx.view.Diagnostic = ""
 	view := tx.view
 	phone, key, original := tx.phone, tx.key, tx.originalKey
 	go m.run(tx, in, phone, key, original)
@@ -416,6 +418,7 @@ func (m *Manager) run(tx *transaction, in Input, phone map[string]any, key, orig
 			var native *Error
 			if errors.As(err, &native) {
 				tx.view.Error, tx.view.ProviderCode = native.Code, native.Number
+				tx.view.Diagnostic = native.Diagnostic
 				if native.RetryAfter > 0 {
 					retry = time.Now().Add(native.RetryAfter)
 				}

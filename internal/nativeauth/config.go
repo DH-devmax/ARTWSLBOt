@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -104,21 +105,33 @@ func publicAddress(address netip.Addr) bool {
 }
 
 func newHTTP() *http.Client {
+	var fallback addressLookup
+	if os.Getenv("NATIVE_DNS_OVER_HTTPS") == "true" {
+		fallback = encryptedLookup
+	}
+	return newHTTPWithLookup(func(ctx context.Context, host string) ([]netip.Addr, error) {
+		return resolveAddresses(ctx, host, func(ctx context.Context, host string) ([]netip.Addr, error) {
+			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+		}, fallback)
+	})
+}
+
+func newHTTPWithLookup(lookup addressLookup) *http.Client {
 	transport := &http.Transport{
 		Proxy: nil, TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 10 * time.Second,
 		MaxIdleConnsPerHost: 1, MaxConnsPerHost: 1, DisableCompression: true,
 		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(address)
 			if err != nil {
-				return nil, errors.New("native_origin_rejected")
+				return nil, rejection("native_origin_rejected")
 			}
-			ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-			if err != nil || len(ips) == 0 {
-				return nil, errors.New("native_dns_failed")
+			ips, err := lookup(ctx, host)
+			if err != nil {
+				return nil, err
 			}
 			for _, ip := range ips {
 				if !publicAddress(ip) {
-					return nil, errors.New("native_origin_rejected")
+					return nil, rejection("native_origin_rejected")
 				}
 			}
 			var dialer net.Dialer
