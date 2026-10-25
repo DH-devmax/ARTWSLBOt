@@ -1,0 +1,8 @@
+# Offline artifact inspection / independent protocol oracle, not production runtime.
+pyelftools==0.33
+PyNaCl==1.6.2
+lz4==4.4.5
+unicorn==2.1.4
+mmh3==5.3.1
+xxhash==4.0.2
+zstandard==0.25.0

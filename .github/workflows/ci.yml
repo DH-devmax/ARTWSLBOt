@@ -1,0 +1,52 @@
+name: platform-checks
+on: [push, pull_request, workflow_call]
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.15.1
+      - run: python3 tools/check_repository.py
+        env:
+          WSL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+      - name: Validate GitHub workflows
+        run: docker run --rm --network none -v "$PWD:/repo:ro" -w /repo rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 -color
+      - name: Scan committed source for secrets
+        run: docker run --rm --network none --user "$(id -u):$(id -g)" -v "$PWD:/repo:ro" ghcr.io/gitleaks/gitleaks@sha256:b5918eb91b8d2473cec722f066abb4352e4ffdc4ec9f4283ec143aba9ec9ebc4 git /repo --config /repo/.gitleaks.toml --redact=100 --no-banner
+      - run: pnpm --dir web install --frozen-lockfile --ignore-scripts
+      - run: pnpm --dir web exec prettier --check src/wsl
+      - run: pnpm --dir web build
+      - run: docker build -f deploy/test.Dockerfile -t wsl-test:ci .
+      - run: docker run --rm wsl-test:ci
+      - run: docker run --rm wsl-test:ci vet -tags sodium ./...
+      - run: docker run --rm --entrypoint python3 wsl-test:ci tools/check_architecture.py
+      - run: docker run --rm --entrypoint python3 -e PYTHONPATH=ai wsl-test:ci -m unittest discover -s ai/tests -v
+      - run: docker build -f deploy/api.Dockerfile -t wsl-api:local .
+      - run: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace wsl-api:local init
+      - run: docker compose up -d --wait postgres
+      - run: docker compose run --rm migrate
+      - run: docker run --rm --network wsl-platform_default -v "$PWD/.env:/src/.env:ro" -e WSL_INTEGRATION=1 -e WSL_CONTAINER_TEST=1 wsl-test:ci test -race -tags sodium -count=1 ./internal/httpapi
+      - run: docker build -f deploy/web.Dockerfile -t wsl-web:local web
+      - run: python3 tools/container_smoke.py
+      - run: docker compose up -d --wait
+      - run: docker compose --profile ops run --rm bootstrap
+      - run: docker build -f deploy/browser-test.Dockerfile -t wsl-browser-test:ci .
+      - run: docker run --rm --network wsl-platform_default --shm-size=256m -v "$PWD:/workspace:ro" wsl-browser-test:ci
+      - if: always()
+        run: docker compose down

@@ -1,0 +1,27 @@
+{
+  "astrbot": {
+    "repository": "https://github.com/sh492773746/AstrBot.git",
+    "commit": "a672ef93cb7dbfb854ae01ff131267b9e8a1e050"
+  },
+  "art_design_pro": {
+    "repository": "https://github.com/Daymychen/art-design-pro.git",
+    "commit": "f3aaf58eec1a0e988f162352c33862327a484f95"
+  },
+  "maibot": {
+    "repository": "https://github.com/Mai-with-u/MaiBot.git",
+    "commit": "062d45cf8bd4272ac57d7ec03fcf405e5a458211",
+    "usage": "Go behavioral migration reference; no Python production runtime"
+  },
+  "agent_desk_reference": {
+    "repository": "https://github.com/huabeitech/agent-desk.git",
+    "commit": "9f211c0d799ebc57463d465fc7a34ce39a9e3754",
+    "usage": "architecture reference only; no source copied"
+  },
+  "simon": {
+    "repository": "https://github.com/alibahmanyar/simon.git",
+    "commit": "3778d2fc30704aa4e9f8828567c08dd7d6957c7d",
+    "image_revision": "699f5a0bd2902a949d5dc89c0a7b323653ed2c04",
+    "image": "alibahmanyar/simon:0.3.7@sha256:f227b10dd5ec15d00167a1ad931b4c17fd2478ae9e521e61dac5f7b7ad59801a",
+    "usage": "private restricted metrics sidecar; no upstream UI or privileged mounts"
+  }
+}

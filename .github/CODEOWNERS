@@ -1,0 +1,9 @@
+# Review ownership for this repository. Protect main after the initial push.
+* @DH-devmax
+/internal/nativeauth/ @DH-devmax
+/internal/nativewire/ @DH-devmax
+/internal/heatbot/ @DH-devmax
+/internal/database/migrations/ @DH-devmax
+/.github/ @DH-devmax
+/deploy/ @DH-devmax
+/compose.yaml @DH-devmax

@@ -1,0 +1,10 @@
+.git
+.env
+.env.*
+web/node_modules
+web/dist
+web/.git
+var
+output
+.venv
+**/__pycache__

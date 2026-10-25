@@ -1,0 +1,131 @@
+name: wsl-platform
+x-runtime: &runtime
+  read_only: true
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+x-database: &database
+  DATABASE_URL: postgres://wsl_platform:${WSL_PLATFORM_PASSWORD:?Initialize .env}@postgres:5432/wsl?sslmode=disable
+  TENANT_DATABASE_URL: postgres://wsl_tenant:${WSL_TENANT_PASSWORD:?Initialize .env}@postgres:5432/wsl?sslmode=disable
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_DB: wsl
+      POSTGRES_USER: wsl_owner
+      POSTGRES_PASSWORD: ${POSTGRES_OWNER_PASSWORD:?Initialize .env}
+      WSL_PLATFORM_PASSWORD: ${WSL_PLATFORM_PASSWORD:?Initialize .env}
+      WSL_TENANT_PASSWORD: ${WSL_TENANT_PASSWORD:?Initialize .env}
+    ports: ["127.0.0.1:55439:5432"]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./deploy/init-db.sql:/docker-entrypoint-initdb.d/10-roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wsl_owner -d wsl"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    cpus: 2
+    mem_limit: 8g
+    restart: unless-stopped
+  migrate:
+    image: ${WSL_API_IMAGE:-wsl-api:local}
+    build: { context: ., dockerfile: deploy/api.Dockerfile }
+    command: ["migrate"]
+    environment:
+      <<: *database
+      MIGRATION_DATABASE_URL: postgres://wsl_owner:${POSTGRES_OWNER_PASSWORD}@postgres:5432/wsl?sslmode=disable
+    depends_on:
+      postgres: { condition: service_healthy }
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+  bootstrap:
+    profiles: ["ops"]
+    image: ${WSL_API_IMAGE:-wsl-api:local}
+    command: ["bootstrap"]
+    environment:
+      <<: *database
+      BOOTSTRAP_USERNAME: ${BOOTSTRAP_USERNAME:-admin}
+      BOOTSTRAP_PASSWORD: ${BOOTSTRAP_PASSWORD:-}
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+  api:
+    <<: *runtime
+    image: ${WSL_API_IMAGE:-wsl-api:local}
+    build: { context: ., dockerfile: deploy/api.Dockerfile }
+    environment:
+      <<: *database
+      MASTER_KEY: ${MASTER_KEY:?Initialize .env}
+      HTTP_ADDR: :8080
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set the public origin}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      ENABLE_NATIVE: "false"
+      SIMON_URL: http://simon:30000
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    networks: [default, monitoring]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    cpus: 2
+    mem_limit: 3g
+    stop_grace_period: 30s
+  heatbot:
+    <<: *runtime
+    image: ${WSL_API_IMAGE:-wsl-api:local}
+    entrypoint: ["heatbot"]
+    environment:
+      AI_BRIDGE_TOKEN: ${AI_BRIDGE_TOKEN:?Initialize bridge token}
+      AI_PROVIDER_ORIGINS: ${AI_PROVIDER_ORIGINS:-}
+      AI_ALLOW_TEST_GENERATION: "false"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8090/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    cpus: 3
+    mem_limit: 12g
+    stop_grace_period: 10s
+  simon:
+    <<: *runtime
+    image: alibahmanyar/simon:0.3.7@sha256:f227b10dd5ec15d00167a1ad931b4c17fd2478ae9e521e61dac5f7b7ad59801a
+    user: "65534:65534"
+    environment:
+      SIMON_ADDRESS: 0.0.0.0
+      SIMON_DB_PATH: /tmp/simon/simon.db
+      SIMON_UPDATE_INTERVAL: "5"
+    networks: [monitoring]
+    tmpfs: ["/tmp:rw,size=32m,noexec,nosuid,uid=65534,gid=65534"]
+    cpus: 0.2
+    mem_limit: 128m
+    # Only API shares this network. No host filesystem, PID or Docker socket.
+  web:
+    <<: *runtime
+    image: ${WSL_WEB_IMAGE:-wsl-web:local}
+    build: { context: ./web, dockerfile: ../deploy/web.Dockerfile }
+    ports: ["127.0.0.1:${WEB_PORT:-5173}:8080"]
+    depends_on:
+      api: { condition: service_healthy }
+    tmpfs: ["/tmp:size=64m,noexec,nosuid"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    cpus: 0.5
+    mem_limit: 512m
+volumes:
+  postgres-data:
+networks:
+  monitoring:
+    internal: true

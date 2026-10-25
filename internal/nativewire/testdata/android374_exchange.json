@@ -1,0 +1,18 @@
+{
+  "apk_sha256": "8f9a1e4483b0dd210b1c2c6e9549776a103af777b08bc04a06252e2fbd91f96d",
+  "native_exchange_offset": "0x2c3a8",
+  "native_context_offset": "0x2dae4",
+  "plain_hex": "7b2273796e746865746963223a747275657d",
+  "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "request_id": 42,
+  "device": 99,
+  "version": 1703240058617,
+  "body_digest": 15588532282309243290,
+  "body_hex": "7e23af94d76de2e4b314af2c5f833ef4f2ba2e78d82ef29427045744787f2e37fd6eeffb6ce72b58fc558543a50186064a6106160e119efd10a5eb9face8",
+  "binding": {
+    "aad_hex": "bddbe6eadf23c22e3e4b7a8aee7cf691",
+    "nonce_hex": "f2ba2e78d82ef294"
+  },
+  "context_plain_hex": "086310031a20000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2080e2cfaa0628959a97ece39fe7cb173001",
+  "network_requests": 0
+}

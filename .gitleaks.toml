@@ -1,0 +1,19 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "SHA-256 checksums in the immutable migration manifest"
+condition = "AND"
+paths = ['''^docs/migrations\.lock\.json$''']
+regexTarget = "secret"
+regexes = ['''^[0-9a-f]{64}$''']
+
+[[rules.allowlists]]
+description = "Two fixed synthetic financial idempotency keys; never credentials"
+condition = "AND"
+paths = ['''^internal/httpapi/integration_test\.go$''']
+regexTarget = "secret"
+regexes = ['''^fixture-finance-00[12]$''']

@@ -1,0 +1,22 @@
+async (page) => {
+  if (!page.url().startsWith('http://127.0.0.1:5173/')) throw new Error('Local development UI only')
+  const button = (name) => page.getByRole('button', { name, exact: true })
+  await page.reload()
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await button('工作台').click()
+  await button('刷新').click()
+  await page.getByText('暂无接入账号', { exact: true }).waitFor()
+  await page.locator('.el-message').waitFor({ state: 'hidden' })
+  await page.screenshot({ path: 'output/playwright/desktop-final.png', fullPage: true })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await button('展开导航').click()
+  await button('群组管理').click()
+  await page.waitForFunction(() => document.querySelector('.sidebar').getBoundingClientRect().right <= 0.5)
+  await page.getByText('暂无记录', { exact: true }).waitFor()
+  if (!await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)) throw new Error('Mobile overflow')
+  await page.screenshot({ path: 'output/playwright/mobile-final.png', fullPage: true })
+  await button('展开导航').click()
+  await button('工作台').click()
+  await page.setViewportSize({ width: 1440, height: 900 })
+  return { passed: true, empty_development_catalog: true, native_connected: false, ai_connected: false }
+}

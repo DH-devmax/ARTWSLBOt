@@ -1,0 +1,33 @@
+# Project Rules
+
+Canonical repository: `https://github.com/DH-devmax/ARTWSLBOt.git`.
+Read `docs/architecture.md` before changing ownership boundaries.
+
+- Production deployment is Docker Compose only. Do not add host service startup,
+  SSH installers, a second deployment path, or a Python production chat runtime.
+- Live UI is `web/src/wsl`, using Art Design Pro / Vue / Element Plus.
+  Do not expose the imported framework demo routes or embed upstream UIs.
+- `internal/heatbot` is the Go replacement for MaiBot chat behavior.
+  It may propose text only; it must not import native transport, control,
+  financial code, database drivers, host commands, or plugin execution.
+- All native actions are owned by Go control and must revalidate tenant, group,
+  account, package, epoch, current role and deadline at submission.
+- Workspace switching is a view operation. Each workspace admits 10 accounts
+  and 100 authorized groups. Never duplicate a native identity/connection owner.
+- MaiBot workspace is superadmin-only. Normal tenant permissions remain the
+  intersection of explicit grants, package, group authorization and native role.
+- No empty scope fallback or cross-group learning, memory, cache or attachment.
+  Credentials stay sealed; never return or audit API keys, prompts or passwords.
+- Applied migrations are immutable; add a forward migration. Never reset `wsl`.
+  Database integration tests may rebuild only `wsl_test`, serially.
+- Simon is a pinned private metric source. Do not mount host root, host PID,
+  Docker socket or proxy arbitrary upstream routes.
+- `native_ready` and `ai_ready` remain false until their documented acceptance
+  criteria pass. Saved configuration is not runtime activation.
+- Run architecture checks, Go race/sodium tests, isolated PostgreSQL tests,
+  frontend build and container smoke before release. Record real results in
+  `docs/test-report.md`; do not describe targets as measurements.
+- No automatic native signup, SMS, login or group actions in tests. Use
+  synthetic protocol fixtures and explicitly authorized isolated native tests.
+- New engine capabilities need scope/concurrency/cancellation tests and an
+  updated entry in `docs/maibot-migration.md`. Unadapted plugins stay disabled.
