@@ -157,6 +157,8 @@ func (s *Server) saveNativeDeployment(w http.ResponseWriter, r *http.Request, p 
 }
 
 func (s *Server) startNativeAuth(w http.ResponseWriter, r *http.Request, p Principal) error {
+	s.accountLifecycle.RLock()
+	defer s.accountLifecycle.RUnlock()
 	var in struct {
 		Version int64 `json:"version"`
 	}
@@ -274,6 +276,8 @@ func (s *Server) pollNativeAuth(w http.ResponseWriter, r *http.Request, p Princi
 }
 
 func (s *Server) nativeAuthAction(w http.ResponseWriter, r *http.Request, p Principal) error {
+	s.accountLifecycle.RLock()
+	defer s.accountLifecycle.RUnlock()
 	var in nativeauth.Input
 	if err := decode(w, r, &in); err != nil {
 		return err

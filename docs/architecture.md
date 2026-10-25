@@ -45,6 +45,12 @@ them before sending. The engine has no native sender.
 
 ## Runtime And Release
 
+Robot removal physically clears account-owned configuration and credentials in
+one transaction, fences in-flight authentication, and disables affected group
+services. Detached tenant ownership and immutable financial/activity history
+remain. Unresolved native submissions block removal. Cleanup and backup recovery
+boundaries are specified in `docs/account-removal.md`.
+
 Only `compose.yaml` is a supported deployment. API, frontend, Go heatbot,
 PostgreSQL and Simon run in containers. Python files under `ai/` are historical
 contract test oracles only; they are not built into production images.

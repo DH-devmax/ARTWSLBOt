@@ -31,6 +31,8 @@ func signupBlocked(ctx context.Context, tx interface {
 }
 
 func (s *Server) startNativeSignup(w http.ResponseWriter, r *http.Request, p Principal) error {
+	s.accountLifecycle.RLock()
+	defer s.accountLifecycle.RUnlock()
 	var in struct {
 		AccountID string `json:"account_id"`
 		Version   int64  `json:"version"`

@@ -31,17 +31,18 @@ type Principal struct {
 }
 
 type Server struct {
-	DB            *database.DB
-	Vault         *security.Vault
-	Origin        string
-	SecureCookie  bool
-	mux           *http.ServeMux
-	loginMu       sync.Mutex
-	loginSlots    chan struct{}
-	loginAttempts map[string]*loginAttempt
-	dummyHash     string
-	Native        *nativeauth.Manager
-	Monitor       *monitor.Client
+	DB               *database.DB
+	Vault            *security.Vault
+	Origin           string
+	SecureCookie     bool
+	mux              *http.ServeMux
+	loginMu          sync.Mutex
+	accountLifecycle sync.RWMutex
+	loginSlots       chan struct{}
+	loginAttempts    map[string]*loginAttempt
+	dummyHash        string
+	Native           *nativeauth.Manager
+	Monitor          *monitor.Client
 }
 
 type loginAttempt struct {
@@ -122,6 +123,8 @@ func (s *Server) routes() {
 	s.handle("GET /api/v1/accounts", false, s.accounts)
 	s.handle("POST /api/v1/accounts", true, s.createAccount)
 	s.handle("PATCH /api/v1/accounts/{id}", true, s.updateAccount)
+	s.handle("GET /api/v1/accounts/{id}/removal-preview", true, s.accountRemovalPreview)
+	s.handle("DELETE /api/v1/accounts/{id}", true, s.removeAccount)
 	s.handle("GET /api/v1/native-deployment", true, s.nativeDeployment)
 	s.handle("PUT /api/v1/native-deployment", true, s.saveNativeDeployment)
 	s.handle("POST /api/v1/accounts/{id}/native-auth", true, s.startNativeAuth)

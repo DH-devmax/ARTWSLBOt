@@ -9,6 +9,7 @@ export const useSession = defineStore('wsl-session', () => {
   const selectedAccount = ref('')
   const drafts = ref<Record<string, unknown>>({})
   const ready = ref(false)
+  const removedScopes = new Set<string>()
 
   async function restore() {
     try {
@@ -19,6 +20,7 @@ export const useSession = defineStore('wsl-session', () => {
     }
   }
   function setUser(value: User, grants: string[] = []) {
+    if (user.value?.id !== value.id) removedScopes.clear()
     user.value = value
     permissions.value = grants
     workspace.value =
@@ -48,9 +50,21 @@ export const useSession = defineStore('wsl-session', () => {
     }
   }
   function saveDraft(scope: string, value: unknown) {
+    if (scope.split(':').some((part) => removedScopes.has(part))) return
     drafts.value[scope] = JSON.parse(JSON.stringify(value))
     if (user.value)
       sessionStorage.setItem(`wsl:drafts:${user.value.id}`, JSON.stringify(drafts.value))
+  }
+  function removeAccountData(id: string, scope: 'wsl' | 'maibot', groups: string[] = []) {
+    if (!user.value) return
+    for (const key of [id, ...groups]) removedScopes.add(key)
+    for (const key of Object.keys(drafts.value)) {
+      if (key.split(':').some((part) => removedScopes.has(part))) delete drafts.value[key]
+    }
+    sessionStorage.setItem(`wsl:drafts:${user.value.id}`, JSON.stringify(drafts.value))
+    const selectionKey = `wsl:account:${user.value.id}:${scope}`
+    if (sessionStorage.getItem(selectionKey) === id) sessionStorage.removeItem(selectionKey)
+    if (workspace.value === scope && selectedAccount.value === id) selectedAccount.value = ''
   }
   async function logout() {
     await api('/auth/logout', 'POST')
@@ -68,6 +82,7 @@ export const useSession = defineStore('wsl-session', () => {
     selectedAccount.value = ''
     workspace.value = 'wsl'
     drafts.value = {}
+    removedScopes.clear()
   }
   return {
     user,
@@ -81,6 +96,7 @@ export const useSession = defineStore('wsl-session', () => {
     selectAccount,
     selectWorkspace,
     saveDraft,
+    removeAccountData,
     logout,
     clear
   }
