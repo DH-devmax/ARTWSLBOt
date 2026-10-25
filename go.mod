@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	github.com/gorilla/websocket v1.5.3
-	github.com/jackc/pgx/v5 v5.7.6
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/klauspost/compress v1.20.3
 	github.com/spaolacci/murmur3 v1.1.0
 	github.com/zeebo/xxh3 v1.0.2
