@@ -200,7 +200,8 @@ func (s *Server) saveUserAccess(w http.ResponseWriter, r *http.Request, p Princi
 
 var routePermissions = map[string]string{
 	"GET /api/v1/overview": "overview:read", "GET /api/v1/accounts": "accounts:read",
-	"GET /api/v1/groups": "groups:read", "PATCH /api/v1/groups/{id}": "groups:configure",
+	"GET /api/v1/accounts/{id}/dashboard": "overview:read",
+	"GET /api/v1/groups":                  "groups:read", "PATCH /api/v1/groups/{id}": "groups:configure",
 	"POST /api/v1/groups/{id}/revoke": "groups:revoke", "PUT /api/v1/groups/{id}/ai-service": "groups:ai",
 	"GET /api/v1/claims": "claims:read", "POST /api/v1/claims": "claims:create",
 	"GET /api/v1/operations": "operations:read", "POST /api/v1/operations": "operations:create",

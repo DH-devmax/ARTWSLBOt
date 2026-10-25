@@ -86,11 +86,18 @@ async (page) => {
     await dialog.getByRole('button', { name: '取消', exact: true }).click()
     await dialog.waitFor({ state: 'hidden' })
     if (writes.length) throw new Error('Preview/cancel wrote data')
+    const choose = async (name) => {
+      await page.getByRole('combobox', { name: '机器人面板', exact: true })
+        .locator('xpath=ancestor::div[contains(@class, "el-select__wrapper")]').click()
+      await page.getByRole('option').filter({ hasText: name }).click()
+    }
+    await choose('工作台总览')
     delayPreview = true
     await page.getByRole('button', { name: '删除机器人 保留机器人', exact: true }).click()
     await previewEntered
     await dialog.getByRole('button', { name: '取消', exact: true }).click()
     await dialog.waitFor({ state: 'hidden' })
+    await choose('待删除机器人')
     await open('待删除机器人')
     releasePreview()
     delayPreview = false

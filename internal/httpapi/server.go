@@ -121,6 +121,7 @@ func (s *Server) routes() {
 		return nil
 	})
 	s.handle("GET /api/v1/accounts", false, s.accounts)
+	s.handle("GET /api/v1/accounts/{id}/dashboard", false, s.accountDashboard)
 	s.handle("POST /api/v1/accounts", true, s.createAccount)
 	s.handle("PATCH /api/v1/accounts/{id}", true, s.updateAccount)
 	s.handle("GET /api/v1/accounts/{id}/removal-preview", true, s.accountRemovalPreview)

@@ -164,7 +164,16 @@
           :closable="false"
           class="load-error"
         />
-        <template v-if="page === 'overview'">
+        <AccountDashboard
+          v-if="page === 'overview' && selectedAccount"
+          :account="selectedAccount"
+          :workspace="session.workspace"
+          :owner="session.user.id"
+          :admin="isAdmin"
+          :refresh-token="lastRefreshed"
+          @remove="openAccountRemoval"
+        />
+        <template v-else-if="page === 'overview'">
           <div class="metrics">
             <div v-for="metric in metrics" :key="metric.label" class="metric"
               ><span>{{ metric.label }}</span
@@ -910,6 +919,7 @@
   import MaiBotConsole from './MaiBotConsole.vue'
   import SystemMonitor from './SystemMonitor.vue'
   import AccountRemoval from './AccountRemoval.vue'
+  import AccountDashboard from './AccountDashboard.vue'
 
   const session = useSession()
   const api = <T,>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal) =>
@@ -1046,52 +1056,36 @@
       ? '平台设置'
       : data.accounts.find((a) => a.id === session.selectedAccount)?.name || '全部账号'
   )
+  const selectedAccount = computed(() =>
+    data.accounts.find((account) => account.id === session.selectedAccount)
+  )
   const scopedOperations = computed(() =>
     data.operations.filter(
       (o) => !session.selectedAccount || o.account_id === session.selectedAccount
     )
   )
-  const scopedGroups = computed(() =>
-    data.groups.filter(
-      (group) =>
-        !session.selectedAccount ||
-        [group.primary_account_id, group.ai_account_id].includes(session.selectedAccount)
-    )
-  )
   const metrics = computed(() => [
     {
       label: isMaiBot.value ? '聊天机器人' : '群管机器人',
-      value: session.selectedAccount ? 1 : overview.value.accounts,
+      value: overview.value.accounts,
       limit: overview.value.limits?.accounts ?? 10,
       color: '#4361ee'
     },
     {
       label: '已授权群组',
-      value: session.selectedAccount
-        ? scopedGroups.value.filter((group) => group.active !== false).length
-        : overview.value.groups,
+      value: overview.value.groups,
       limit: overview.value.limits?.groups ?? 100,
       color: '#13a584'
     },
     {
       label: 'AI 群组',
-      value: session.selectedAccount
-        ? scopedGroups.value.filter((group) => group.active !== false && group.ai_enabled).length
-        : overview.value.ai_groups,
+      value: overview.value.ai_groups,
       limit: overview.value.limits?.ai_groups ?? 100,
       color: '#b477e2'
     },
     {
       label: isMaiBot.value ? '待启用 AI 群' : '待审核申请',
-      value: session.selectedAccount
-        ? isMaiBot.value
-          ? scopedGroups.value.filter((group) => group.ai_requested && !group.ai_enabled).length
-          : data.claims.filter(
-              (claim) => claim.account_id === session.selectedAccount && claim.state === 'pending'
-            ).length
-        : isMaiBot.value
-          ? overview.value.ai_requests
-          : overview.value.pending_claims,
+      value: isMaiBot.value ? overview.value.ai_requests : overview.value.pending_claims,
       limit: 0,
       color: '#e5a339'
     }

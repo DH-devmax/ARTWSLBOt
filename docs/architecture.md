@@ -68,3 +68,7 @@ uses explicit image tags/digests and a maintenance window, not in-app self-updat
 Native transport/receiver/renewal and full MaiBot feature parity are incomplete.
 Neither readiness gate may be enabled by a configuration-only save or health
 check. `docs/maibot-migration.md` is the capability-by-capability status source.
+
+The selected-account dashboard exposes scoped database aggregates, not
+unobserved receiver or model telemetry. Measurement definitions, tenant
+boundaries and unavailable live signals are specified in `docs/account-dashboard.md`.
