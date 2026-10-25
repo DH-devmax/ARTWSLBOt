@@ -22,6 +22,14 @@ legacy host Go/Vite helper. Do not run `docker compose down -v` on a real stack.
 CI: repository and immutable migration checks, architecture imports/Compose
 boundaries, Go race tests with libsodium, isolated PostgreSQL integration,
 frontend build, hardened container smoke and full Compose startup.
+Browser checks also run inside Docker, with synthetic writes and no native
+signup/login/model calls. Clean product builds use `web/tsconfig.wsl.json`.
+
+Main-branch protection requires a pull request and the successful `foundation`
+check against the up-to-date branch, resolves review conversations, and rejects
+force pushes/deletion. The rule includes administrators. A sole maintainer
+does not need to approve their own pull request; CODEOWNERS still identifies
+the reviewer. Do not bypass checks by changing the workflow or migration lock.
 
 `docker-release` runs the checks again before publishing API/web images to
 `ghcr.io/dh-devmax/artwslbot-{api,web}:sha-<commit>`. It records immutable
