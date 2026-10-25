@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"wangshangliao/internal/gateway"
 	"wangshangliao/internal/security"
 )
 
@@ -37,6 +38,20 @@ func TestDashboardHealth(t *testing.T) {
 	health, backlog = classifyAccountDashboard(out)
 	if health.Status != "attention" || backlog.Status != "attention" {
 		t.Fatal("unknown results require review even when also backlogged")
+	}
+	out.Inbox = dashboardInbox{}
+	out.Operations = dashboardOperations{}
+	out.Receiver = &receiverView{Enabled: true, Observed: true, Snapshot: &gateway.ReceiverSnapshot{State: "connected", HeartbeatAt: &now}}
+	out.RuntimeObserved = true
+	health, _ = classifyAccountDashboard(out)
+	if health.Status != "healthy" {
+		t.Fatal("fresh connected receiver was not observed")
+	}
+	out.Receiver.Snapshot.State = "blocked"
+	out.RuntimeObserved = false
+	health, _ = classifyAccountDashboard(out)
+	if health.Status != "attention" {
+		t.Fatal("persisted blocked state lost after owner shutdown")
 	}
 }
 
@@ -134,6 +149,9 @@ func TestPostgresAccountDashboard(t *testing.T) {
 		t.Fatalf("wrong account snapshot: %+v", all)
 	}
 	a := fetch(alice, shared)
+	if a.Receiver != nil {
+		t.Fatal("tenant received shared account runtime counters")
+	}
 	if a.Visibility != "tenant_groups" || a.Groups.Authorized != 1 || a.Performance.Inserted != 251 ||
 		a.Inbox.Pending != 1 || a.Inbox.Unresolved != 1 || a.Inbox.Quarantined != 0 ||
 		a.Operations.Queued != 1 || a.Operations.Unknown != 0 || a.Health.Status != "backlogged" {

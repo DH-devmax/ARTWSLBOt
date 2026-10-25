@@ -33,7 +33,12 @@ const errors: Record<string, string> = {
   subscription_below_current_usage: '套餐名额小于当前使用量，请先调整群授权',
   database_unavailable: '数据库暂时不可用，请稍后重试',
   authentication_required: '会话已失效，请重新登录',
-  superadmin_required: '此功能仅限超管使用'
+  superadmin_required: '此功能仅限超管使用',
+  native_login_required: '请先完成此机器人原生登录',
+  receiver_unavailable: '消息接收服务尚未启动',
+  native_im_profile_missing: '尚未导入原生 IM 配置',
+  native_im_profile_invalid: 'IM 配置格式不正确',
+  native_disconnect_before_profile: '请先停用所有账号的消息接收，再更新 IM 配置'
 }
 
 Object.assign(errors, {
@@ -87,7 +92,7 @@ Object.assign(errors, {
   native_deployment_changed: '协议配置已变化，请重新登录',
   native_site_session_expired: '网站会话已失效，此次原生登录未保存',
   native_identity_already_bound: '此旺商聊身份已经绑定到另一个账号面板',
-  native_disconnect_before_login: '请先停止此账号接入，再进行原生登录',
+  native_disconnect_before_login: '请先关闭此账号的“消息接收”，再进行原生登录',
   native_reauth_required: '原生会话已失效，请取消后重新登录',
   native_security_required: '旺商聊要求验证六位安全码',
   native_security_setup_required: '请先在官方客户端设置安全码',

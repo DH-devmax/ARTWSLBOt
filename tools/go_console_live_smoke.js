@@ -15,7 +15,8 @@ async (page) => {
   for (const account of [...wsl, ...chat]) {
     const dashboard = await request(`/accounts/${account.id}/dashboard`, account.workspace)
     if (dashboard.account.id !== account.id || dashboard.account.workspace !== account.workspace ||
-        dashboard.runtime_observed || dashboard.performance.series.length !== 15 ||
+        (dashboard.runtime_observed && (!dashboard.receiver?.observed || !dashboard.receiver?.snapshot)) ||
+        dashboard.performance.series.length !== 15 ||
         (!dashboard.performance.latency_samples && dashboard.performance.p95_ms !== null)) {
       throw new Error('Scoped live dashboard claimed unavailable metrics or mixed accounts')
     }

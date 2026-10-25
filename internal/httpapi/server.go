@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"wangshangliao/internal/database"
+	"wangshangliao/internal/gateway"
 	"wangshangliao/internal/monitor"
 	"wangshangliao/internal/nativeauth"
 	"wangshangliao/internal/security"
@@ -43,6 +44,7 @@ type Server struct {
 	dummyHash        string
 	Native           *nativeauth.Manager
 	Monitor          *monitor.Client
+	Receiver         *gateway.ReceiverManager
 }
 
 type loginAttempt struct {
@@ -122,6 +124,10 @@ func (s *Server) routes() {
 	})
 	s.handle("GET /api/v1/accounts", false, s.accounts)
 	s.handle("GET /api/v1/accounts/{id}/dashboard", false, s.accountDashboard)
+	s.handle("GET /api/v1/accounts/{id}/receiver", true, s.receiver)
+	s.handle("PUT /api/v1/accounts/{id}/receiver", true, s.setReceiver)
+	s.handle("GET /api/v1/native-im-profile", true, s.imProfile)
+	s.handle("PUT /api/v1/native-im-profile", true, s.saveIMProfile)
 	s.handle("POST /api/v1/accounts", true, s.createAccount)
 	s.handle("PATCH /api/v1/accounts/{id}", true, s.updateAccount)
 	s.handle("GET /api/v1/accounts/{id}/removal-preview", true, s.accountRemovalPreview)

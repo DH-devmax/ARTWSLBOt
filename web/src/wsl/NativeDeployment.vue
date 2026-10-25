@@ -3,6 +3,8 @@
   <ElDialog
     v-model="visible"
     title="原生协议配置"
+    class="platform-config-dialog"
+    align-center
     width="560px"
     :close-on-click-modal="false"
     @close="reset"
@@ -35,6 +37,23 @@
         :closable="false"
       />
     </ElForm>
+    <ElDivider />
+    <ElForm label-position="top" @submit.prevent="saveIM">
+      <ElFormItem
+        :label="imStatus.configured ? '原生 IM 配置 · 已配置' : '原生 IM 配置 · 尚未导入'"
+      >
+        <ElInput
+          v-model="imKey"
+          type="password"
+          autocomplete="off"
+          aria-label="原生 IM AppKey"
+          :disabled="savingIM"
+        />
+      </ElFormItem>
+      <ElButton :loading="savingIM" :disabled="!imKey" :icon="Upload" @click="saveIM"
+        >保存 IM 配置</ElButton
+      >
+    </ElForm>
     <template #footer>
       <ElButton :disabled="saving" @click="visible = false">关闭</ElButton>
       <ElButton
@@ -58,7 +77,10 @@
   const visible = ref(false),
     saving = ref(false),
     error = ref(''),
-    configuration = ref('')
+    configuration = ref(''),
+    imKey = ref(''),
+    savingIM = ref(false)
+  const imStatus = ref<Row>({})
   const status = ref<Row>({}),
     fileInput = ref<HTMLInputElement>()
   let generation = 0
@@ -67,6 +89,7 @@
     generation++
     selection++
     configuration.value = ''
+    imKey.value = ''
     error.value = ''
     if (fileInput.value) fileInput.value.value = ''
   }
@@ -74,8 +97,14 @@
     visible.value = true
     const current = ++generation
     try {
-      const value = await api<Row>('/native-deployment')
-      if (current === generation) status.value = value
+      const [value, im] = await Promise.all([
+        api<Row>('/native-deployment'),
+        api<Row>('/native-im-profile')
+      ])
+      if (current === generation) {
+        status.value = value
+        imStatus.value = im
+      }
     } catch (e) {
       if (current === generation) error.value = (e as Error).message
     }
@@ -112,6 +141,26 @@
       if (current === generation) error.value = (e as Error).message
     } finally {
       saving.value = false
+    }
+  }
+  async function saveIM() {
+    if (savingIM.value || !imKey.value) return
+    const current = generation
+    savingIM.value = true
+    error.value = ''
+    try {
+      const result = await api<Row>('/native-im-profile', 'PUT', {
+        version: imStatus.value.version || 0,
+        app_key: imKey.value
+      })
+      if (current === generation) {
+        imStatus.value = result
+        imKey.value = ''
+      }
+    } catch (e) {
+      if (current === generation) error.value = (e as Error).message
+    } finally {
+      savingIM.value = false
     }
   }
 </script>

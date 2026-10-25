@@ -96,6 +96,8 @@ func run() error {
 	}
 	server := httpapi.New(db, vault, origin, os.Getenv("COOKIE_SECURE") == "true")
 	defer server.Native.Close()
+	receiverDone := server.RunReceiver(ctx)
+	defer func() { stop(); <-receiverDone }()
 	addr := os.Getenv("HTTP_ADDR")
 	if addr == "" {
 		addr = "127.0.0.1:8080"
@@ -140,7 +142,8 @@ func retention(ctx context.Context, db *database.DB) {
                     WHERE status='queued' AND expires_at<now();
                 UPDATE operations SET payload_sealed=NULL WHERE created_at<now()-interval '7 days' AND payload_sealed IS NOT NULL;
                 UPDATE inbox SET payload_sealed=NULL,state=CASE WHEN state IN('pending','unresolved') THEN 'quarantined' ELSE state END
-                    WHERE received_at<now()-interval '7 days' AND payload_sealed IS NOT NULL;`)
+                    WHERE received_at<now()-interval '7 days' AND payload_sealed IS NOT NULL;
+                DELETE FROM native_received_events WHERE received_at<now()-interval '7 days';`)
 			cancel()
 			if err != nil {
 				slog.Error("retention failed", "code", "database_error")

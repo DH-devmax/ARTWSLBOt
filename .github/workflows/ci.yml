@@ -42,6 +42,7 @@ jobs:
       - run: docker compose up -d --wait postgres
       - run: docker compose run --rm migrate
       - run: docker run --rm --network wsl-platform_default -v "$PWD/.env:/src/.env:ro" -e WSL_INTEGRATION=1 -e WSL_CONTAINER_TEST=1 wsl-test:ci test -race -tags sodium -count=1 ./internal/httpapi
+      - run: docker run --rm --network wsl-platform_default -v "$PWD/.env:/src/.env:ro" -e WSL_GATEWAY_INTEGRATION=1 -e WSL_CONTAINER_TEST=1 wsl-test:ci test -race -tags sodium -count=1 ./internal/gateway
       - run: docker build -f deploy/web.Dockerfile -t wsl-web:local web
       - run: python3 tools/container_smoke.py
       - run: docker compose up -d --wait

@@ -10,5 +10,6 @@
   "009_console_settings.sql": "548e1455ecc9444645569197dc7df74f20137f21744686b957d073ea393cc88a",
   "010_account_removal.sql": "83edccbfadfaa67fbbfff5179a4d3ab85bf412411609567af5cb39e070e93220",
   "011_account_dashboard.sql": "07986830f72af4e11c318366f3da787a49dc17b36e08bb2aadd2ad289d5135d8",
-  "012_account_group_sample.sql": "20dc1084cfb9f5bb0939143e801f4ed4daf385bf6220e696db997dae212d3e78"
+  "012_account_group_sample.sql": "20dc1084cfb9f5bb0939143e801f4ed4daf385bf6220e696db997dae212d3e78",
+  "013_native_receiver.sql": "17246ce4cf158f61cb8a61da475962bfa04dd8ce41f1dbb252a4ae3d51f46719"
 }

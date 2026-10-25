@@ -6,6 +6,15 @@
         <span>{{ workspace === 'maibot' ? '热群机器人' : '旺商聊机器人' }} · 独立账号工作台</span>
       </div>
       <div class="account-dashboard-actions">
+        <ElSwitch
+          v-if="admin && sample?.receiver"
+          :model-value="sample.receiver.enabled"
+          :loading="receiverSaving"
+          :disabled="receiverSaving || sample.account.auth_state !== 'authenticated'"
+          aria-label="消息接收"
+          active-text="消息接收"
+          @change="toggleReceiver"
+        />
         <ElTooltip content="刷新账号指标">
           <ElButton
             text
@@ -54,7 +63,7 @@
         </div>
         <div>
           <ElTooltip content="最近 60 秒内已入库的去重消息数 / 60；不代表原生接口调用频率">
-            <span>消息入库速率 · 60 秒</span>
+            <span>业务入库速率 · 60 秒</span>
           </ElTooltip>
           <strong>{{ sample.performance.per_second.toFixed(2) }}<small>条/秒</small></strong>
         </div>
@@ -82,8 +91,8 @@
               }}</dd></div
             >
             <div
-              ><dt>接入开关</dt
-              ><dd>{{ sample.account.connection_enabled ? '已启用' : '已停用' }}</dd></div
+              ><dt>原生动作</dt
+              ><dd>{{ sample.account.connection_enabled ? '已启用' : '未启用' }}</dd></div
             >
             <div
               ><dt>连接记录</dt><dd>{{ connectionLabel(sample.account.runtime_state) }}</dd></div
@@ -96,7 +105,7 @@
               ><dd>{{ sample.groups.ai_enabled }} / {{ sample.groups.ai_pending }}</dd></div
             >
           </dl>
-          <div class="account-observation-note"
+          <div v-if="!sample.runtime_observed" class="account-observation-note"
             ><ElIcon><InfoFilled /></ElIcon>实时连接、心跳与 ACK 尚无监测数据</div
           >
           <div v-for="reason in visibleReasons" :key="reason" class="account-reason">{{
@@ -148,6 +157,85 @@
           >
         </section>
       </div>
+      <section
+        v-if="admin && sample.receiver"
+        class="account-status-section receiver-section"
+        aria-label="消息接收运行状态"
+      >
+        <div class="account-section-heading">
+          <h3>消息接收</h3>
+          <ElTag :type="sample.runtime_observed ? 'success' : 'info'">
+            {{
+              sample.runtime_observed
+                ? connectionLabel(sample.receiver.snapshot?.state)
+                : '暂无实时采样'
+            }}
+          </ElTag>
+        </div>
+        <ElAlert
+          v-if="sample.receiver.snapshot?.error && sample.receiver.enabled"
+          :title="receiverError(sample.receiver.snapshot.error)"
+          type="warning"
+          :closable="false"
+        />
+        <dl v-if="sample.receiver.snapshot" class="account-status-list">
+          <div
+            ><dt>接收速率 · 60 秒</dt
+            ><dd>{{
+              sample.receiver.snapshot.per_second == null
+                ? '暂无监测'
+                : `${sample.receiver.snapshot.per_second.toFixed(2)} 条/秒`
+            }}</dd></div
+          >
+          <div
+            ><dt>最近心跳</dt><dd>{{ date(sample.receiver.snapshot.heartbeat_at) }}</dd></div
+          >
+          <div
+            ><dt>心跳往返</dt><dd>{{ ms(sample.receiver.snapshot.heartbeat_ms) }}</dd></div
+          >
+          <div
+            ><dt>接收队列</dt
+            ><dd
+              >{{ sample.receiver.snapshot.queue_depth }} /
+              {{ sample.receiver.snapshot.queue_capacity }}</dd
+            ></div
+          >
+          <div
+            ><dt>收包 / 消息</dt
+            ><dd
+              >{{ sample.receiver.snapshot.frames }} / {{ sample.receiver.snapshot.messages }}</dd
+            ></div
+          >
+          <div
+            ><dt>重复消息 / ACK</dt
+            ><dd
+              >{{ sample.receiver.snapshot.duplicates }} / {{ sample.receiver.snapshot.acks }}</dd
+            ></div
+          >
+          <div
+            ><dt>隔离包 / 重连</dt
+            ><dd
+              >{{ sample.receiver.snapshot.quarantined }} /
+              {{ sample.receiver.snapshot.reconnects }}</dd
+            ></div
+          >
+          <div
+            ><dt>可靠落盘 P95</dt><dd>{{ ms(sample.receiver.snapshot.durable_p95_ms) }}</dd></div
+          >
+          <div
+            ><dt>ACK 写出 P95</dt><dd>{{ ms(sample.receiver.snapshot.ack_p95_ms) }}</dd></div
+          >
+          <div
+            ><dt>最近接包</dt><dd>{{ date(sample.receiver.snapshot.last_received_at) }}</dd></div
+          >
+          <div
+            ><dt>最近 ACK 写出</dt><dd>{{ date(sample.receiver.snapshot.last_ack_at) }}</dd></div
+          >
+        </dl>
+        <p class="account-observation-note"
+          >接收事件待群映射；业务处理暂停。计数为本次接收周期，延迟取最近至多 1024 条样本。</p
+        >
+      </section>
       <section class="account-performance" aria-label="消息性能">
         <div class="account-section-heading">
           <h3>消息性能</h3>
@@ -183,7 +271,7 @@
               {{ sample.performance.invalid_timing_samples }}</span
             >
           </ElTooltip>
-          <span>可靠落盘 / ACK 延迟：暂无监测</span>
+          <span v-if="!sample.runtime_observed">可靠落盘 / ACK 延迟：暂无监测</span>
           <span>原生 HTTP 排队 / 限流：暂无监测</span>
         </div>
       </section>
@@ -213,6 +301,7 @@
     loading = ref(false),
     error = ref(''),
     stale = ref(false)
+  const receiverSaving = ref(false)
   const chartElement = ref<HTMLElement>()
   let controller: AbortController | undefined,
     generation = 0
@@ -235,7 +324,8 @@
       not_authenticated: '未登录',
       disabled: '接入停用',
       disconnected: '未连接',
-      unobserved: '实时健康度未监测'
+      unobserved: '实时健康度未监测',
+      healthy: '接收正常'
     })[status] || '暂无监测'
   const backlogLabel = (status: string) =>
     ({
@@ -245,24 +335,31 @@
       empty: '无数据库积压'
     })[status] || '暂无数据'
   const healthType = (status: string) =>
-    status === 'attention'
-      ? 'danger'
-      : ['backlogged', 'pending'].includes(status)
-        ? 'warning'
-        : 'info'
+    status === 'healthy'
+      ? 'success'
+      : status === 'attention'
+        ? 'danger'
+        : ['backlogged', 'pending'].includes(status)
+          ? 'warning'
+          : 'info'
   const connectionLabel = (status: string) =>
     ({
-      connected: '已连接（状态记录）',
+      connected: '已连接',
       reconnecting: '重连中',
       connecting: '连接中',
-      disconnected: '未连接'
+      disconnected: '未连接',
+      stopped: '已停止',
+      blocked: '已阻断'
     })[status] || '未知'
   const reasonLabel = (reason: string) =>
     ({
       old_pending: '有消息或操作等待超过积压阈值',
       quarantined: '有隔离消息待排查',
       unknown_operations: '有原生操作结果未知，需复核',
-      invalid_timing: '有消息时间差异常，已从延迟统计排除'
+      invalid_timing: '有消息时间差异常，已从延迟统计排除',
+      receiver_blocked: '接收器已阻断，需核对原因',
+      heartbeat_stale: '心跳观测已过期',
+      receiver_queue: '接收队列接近上限'
     })[reason] || reason
   const visibleReasons = computed(() =>
     (sample.value?.health.reasons || []).filter((r: string) => r !== 'runtime_unobserved')
@@ -272,6 +369,45 @@
       ? `${props.account.name} 最近 15 分钟入库消息共 ${sample.value.performance.series.reduce((sum: number, b: Row) => sum + b.count, 0)} 条`
       : '暂无消息性能数据'
   )
+
+  const receiverError = (code: string) =>
+    ({
+      im_kicked: '原生连接被踢下线，请先核对其他客户端',
+      im_auth_rejected: '消息登录令牌被拒绝，请停用后重新登录',
+      native_push_boundary_unknown: '收到无法核验边界的消息包，已隔离并暂停恢复水位',
+      receiver_configuration_unavailable: '接收配置或会话不可用',
+      receiver_configuration_invalid: '接收配置与已登录会话不匹配',
+      native_reauth_required: '原生会话需要重新验证，请先停用接收',
+      native_rate_limited: '原生读取限流，等待恢复',
+      receiver_database_unavailable: '数据库暂时不可用，未确认未落盘消息',
+      im_connection_failed: '消息服务器暂时连接失败，等待重连',
+      im_discovery_failed: '消息服务器发现失败，等待重试'
+    })[code] || '接收连接异常，正在等待恢复或复核'
+
+  async function toggleReceiver(value: unknown) {
+    if (!sample.value?.receiver || receiverSaving.value) return
+    const originalScope = scope(),
+      workspace = props.workspace,
+      accountID = props.account.id
+    receiverSaving.value = true
+    try {
+      await api(
+        `/accounts/${accountID}/receiver`,
+        'PUT',
+        {
+          enabled: !!value,
+          revision: sample.value.receiver.revision
+        },
+        undefined,
+        workspace
+      )
+      if (originalScope === scope()) await load()
+    } catch (e) {
+      if (originalScope === scope()) error.value = (e as Error).message
+    } finally {
+      receiverSaving.value = false
+    }
+  }
 
   async function load() {
     controller?.abort()
@@ -390,6 +526,9 @@
 <style scoped>
   .account-dashboard {
     min-width: 0;
+  }
+  .receiver-section {
+    margin-top: 20px;
   }
   .account-dashboard-heading,
   .account-section-heading,

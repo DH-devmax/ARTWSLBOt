@@ -58,12 +58,14 @@ An empty persistent queue is labeled “无数据库积压”. It is not evidenc
 in-memory queues are empty or native HTTP is unthrottled. Stored login,
 connection switch and connection state are displayed as records.
 
-There is currently no wired native receiver/heartbeat/ACK/HTTP-scheduler
-observer. `runtime_observed` remains false; the UI shows those measurements
-as unavailable and never manufactures a health percentage or a healthy
-connection from a stored `connected` flag. These runtime measurements still
-require receiver implementation and acceptance before they can be shown.
-Native and AI readiness remain false.
+Superadmins additionally receive the independent receive-only observer from
+`docs/native-receiver.md`: fresh leases, heartbeat, bounded socket queue,
+durable commit and ACK-write latency. Only that observer can set
+`runtime_observed=true`; a stored `connected` flag cannot. Tenant responses do
+not contain shared-account runtime counts. Unobserved or stale metrics remain
+visibly unavailable. The original business inbox chart retains its definition;
+opaque native events awaiting verified group mapping are shown separately.
+HTTP scheduler telemetry remains unavailable. Native and AI readiness remain false.
 
 ## Refresh
 

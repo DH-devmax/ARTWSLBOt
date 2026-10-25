@@ -172,7 +172,8 @@ func (s *Server) startNativeAuth(w http.ResponseWriter, r *http.Request, p Princ
 	account := r.PathValue("id")
 	var version int64
 	var connected bool
-	if err = s.DB.Platform.QueryRow(r.Context(), `SELECT version,connection_enabled FROM accounts WHERE id=$1`, account).
+	if err = s.DB.Platform.QueryRow(r.Context(), `SELECT version,connection_enabled OR EXISTS(
+        SELECT 1 FROM account_receivers WHERE account_id=accounts.id AND enabled) FROM accounts WHERE id=$1`, account).
 		Scan(&version, &connected); err == pgx.ErrNoRows {
 		return fail(404, "account_not_found")
 	} else if err != nil {
@@ -237,7 +238,8 @@ func (s *Server) startNativeAuth(w http.ResponseWriter, r *http.Request, p Princ
 		}
 		tag, err := tx.Exec(ctx, `UPDATE accounts SET native_uid=$1,credential_sealed=$2,auth_state='authenticated',
             authenticated_at=now(),native_nickname=$3,version=version+1,epoch=epoch+1
-            WHERE id=$4 AND version=$5 AND NOT connection_enabled AND (native_uid IS NULL OR native_uid=$1)`,
+            WHERE id=$4 AND version=$5 AND NOT connection_enabled AND (native_uid IS NULL OR native_uid=$1)
+            AND NOT EXISTS(SELECT 1 FROM account_receivers WHERE account_id=accounts.id AND enabled)`,
 			strconv.FormatUint(session.UID, 10), sealed, nickname, account, version)
 		var postgres *pgconn.PgError
 		if errors.As(err, &postgres) && postgres.Code == "23505" {
@@ -313,7 +315,8 @@ func (s *Server) forgetNativeSession(w http.ResponseWriter, r *http.Request, p P
 	defer tx.Rollback(r.Context())
 	tag, err := tx.Exec(r.Context(), `UPDATE accounts SET credential_sealed=NULL,auth_state='not_authenticated',
         authenticated_at=NULL,version=version+1,epoch=epoch+1
-        WHERE id=$1 AND version=$2 AND NOT connection_enabled`, r.PathValue("id"), in.Version)
+        WHERE id=$1 AND version=$2 AND NOT connection_enabled AND NOT EXISTS(
+            SELECT 1 FROM account_receivers WHERE account_id=accounts.id AND enabled)`, r.PathValue("id"), in.Version)
 	if err != nil {
 		return err
 	}
