@@ -79,6 +79,18 @@ func NewManager() *Manager {
 	return &Manager{items: make(map[string]*transaction), starts: make(map[string]startBudget), Factory: NewClient}
 }
 
+func (m *Manager) ActiveAccount(account string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, item := range m.items {
+		if item.view.AccountID == account && time.Now().Before(item.view.ExpiresAt) &&
+			item.view.Status != "authenticated" && item.view.Status != "registered" && item.view.Status != "cancelled" {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Manager) Start(owner, account string, d Deployment, commit func(context.Context, Session, string) error, sources ...RequestIDSource) (View, error) {
 	return m.start(owner, account, d, commit, nil, sources...)
 }

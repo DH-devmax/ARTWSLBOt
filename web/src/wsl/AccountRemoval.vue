@@ -80,6 +80,8 @@
   let generation = 0
   const cleanupLabels = [
     ['messages', '账号消息'],
+    ['native_events', '原生接收事件'],
+    ['receiver', '消息接收配置与水位'],
     ['memberships', '群成员关系'],
     ['claim_codes', '授权码'],
     ['claims', '认领申请'],

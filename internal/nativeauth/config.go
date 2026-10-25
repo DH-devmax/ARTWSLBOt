@@ -116,6 +116,10 @@ func newHTTP() *http.Client {
 	})
 }
 
+// TransportHTTP shares the native client's checked DNS dialer and strict TLS.
+// Callers must additionally restrict discovery and WebSocket URL shapes.
+func TransportHTTP() *http.Client { return newHTTP() }
+
 func newHTTPWithLookup(lookup addressLookup) *http.Client {
 	transport := &http.Transport{
 		Proxy: nil, TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 10 * time.Second,

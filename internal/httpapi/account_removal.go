@@ -56,6 +56,8 @@ func readRemovalPreview(r *http.Request, tx pgx.Tx, lock bool) (removalPreview, 
 	err = tx.QueryRow(r.Context(), `SELECT
         jsonb_build_object(
           'messages',(SELECT count(*) FROM inbox WHERE account_id=$1),
+          'native_events',(SELECT count(*) FROM native_received_events WHERE account_id=$1),
+          'receiver',(SELECT count(*) FROM account_receivers WHERE account_id=$1),
           'memberships',(SELECT count(*) FROM account_groups WHERE account_id=$1),
           'personas',(SELECT count(*) FROM personas WHERE account_id=$1),
           'settings',(SELECT count(*) FROM maibot_settings WHERE account_id=$1),
@@ -281,6 +283,9 @@ func (s *Server) removeAccount(w http.ResponseWriter, r *http.Request, p Princip
 	}
 	if err = tx.Commit(r.Context()); err != nil {
 		return err
+	}
+	if s.Receiver != nil {
+		s.Receiver.Stop(view.ID)
 	}
 	s.Native.ForgetAccount(view.ID)
 	send(w, 200, view)

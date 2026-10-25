@@ -75,6 +75,7 @@ type accountDashboard struct {
 	Backlog          dashboardHealth      `json:"backlog"`
 	BacklogThreshold int                  `json:"backlog_threshold_seconds"`
 	RuntimeObserved  bool                 `json:"runtime_observed"`
+	Receiver         *receiverView        `json:"receiver,omitempty"`
 }
 
 func (s *Server) accountDashboard(w http.ResponseWriter, r *http.Request, p Principal) error {
@@ -161,6 +162,13 @@ func (s *Server) accountDashboard(w http.ResponseWriter, r *http.Request, p Prin
 		if err = tx.Commit(r.Context()); err != nil {
 			return err
 		}
+	}
+	if p.Role == "superadmin" {
+		receiver, err := s.readReceiver(r, out.Account.ID)
+		if err != nil {
+			return err
+		}
+		out.Receiver, out.RuntimeObserved = &receiver, receiver.Observed
 	}
 	out.Health, out.Backlog = classifyAccountDashboard(out)
 	w.Header().Set("Cache-Control", "no-store")
@@ -262,6 +270,33 @@ func classifyAccountDashboard(out accountDashboard) (dashboardHealth, dashboardH
 		backlog.Status = "attention"
 	}
 	health := dashboardHealth{Status: "unobserved", Reasons: slices.Clone(backlog.Reasons)}
+	if out.Receiver != nil && out.Receiver.Enabled {
+		switch {
+		case out.Receiver.Snapshot != nil && out.Receiver.Snapshot.State == "blocked":
+			health.Status = "attention"
+			health.Reasons = append(health.Reasons, "receiver_blocked")
+		case !out.RuntimeObserved || out.Receiver.Snapshot == nil:
+			health.Status = "unobserved"
+		case out.Receiver.Snapshot.State != "connected":
+			health.Status = "disconnected"
+		case out.Receiver.Snapshot.HeartbeatAt == nil ||
+			out.SampledAt.Sub(*out.Receiver.Snapshot.HeartbeatAt) > 40*time.Second:
+			health.Status = "attention"
+			health.Reasons = append(health.Reasons, "heartbeat_stale")
+		case out.Receiver.Snapshot.QueueDepth >= 24:
+			health.Status, backlog.Status = "backlogged", "backlogged"
+			health.Reasons = append(health.Reasons, "receiver_queue")
+		default:
+			health.Status = "healthy"
+		}
+		if backlog.Status == "attention" || backlog.Status == "backlogged" {
+			health.Status = backlog.Status
+		}
+		if !out.RuntimeObserved {
+			health.Reasons = append(health.Reasons, "runtime_unobserved")
+		}
+		return health, backlog
+	}
 	switch {
 	case backlog.Status == "attention" || backlog.Status == "backlogged":
 		health.Status = backlog.Status
@@ -272,8 +307,7 @@ func classifyAccountDashboard(out accountDashboard) (dashboardHealth, dashboardH
 	case out.Account.RuntimeState != "connected":
 		health.Status = "disconnected"
 	}
-	// No heartbeat/ACK/HTTP scheduler observer is wired yet. A stored connected
-	// flag or empty database queue cannot prove a healthy live receiver.
+	// Stored flags do not prove live receiver health.
 	health.Reasons = append(health.Reasons, "runtime_unobserved")
 	if out.Performance.InvalidTiming > 0 {
 		health.Reasons = append(health.Reasons, "invalid_timing")

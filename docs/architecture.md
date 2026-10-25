@@ -65,10 +65,14 @@ uses explicit image tags/digests and a maintenance window, not in-app self-updat
 
 ## Current Acceptance
 
-Native transport/receiver/renewal and full MaiBot feature parity are incomplete.
+Receive-only transport, session-bound IM token renewal and durable raw ingress
+are implemented in `internal/gateway`; see `docs/native-receiver.md`.
+Business group mapping, application payload decoding, full native acceptance
+and full MaiBot feature parity remain incomplete.
 Neither readiness gate may be enabled by a configuration-only save or health
 check. `docs/maibot-migration.md` is the capability-by-capability status source.
 
-The selected-account dashboard exposes scoped database aggregates, not
-unobserved receiver or model telemetry. Measurement definitions, tenant
+The selected-account dashboard exposes scoped database aggregates and, for
+superadmins, fresh receive-only runtime observations. Model telemetry remains
+unavailable. Measurement definitions, tenant
 boundaries and unavailable live signals are specified in `docs/account-dashboard.md`.
