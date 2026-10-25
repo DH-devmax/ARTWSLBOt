@@ -242,6 +242,15 @@ func (m *Manager) CancelAccount(account string) {
 	}
 }
 
+// ForgetAccount is called after durable removal, while new starts are excluded
+// by the control API. Running requests still have to pass the database fence.
+func (m *Manager) ForgetAccount(account string) {
+	m.CancelAccount(account)
+	m.mu.Lock()
+	delete(m.starts, account)
+	m.mu.Unlock()
+}
+
 func (m *Manager) Action(owner, account, id string, in Input) (View, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

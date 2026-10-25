@@ -242,9 +242,9 @@ func (s *Server) groups(w http.ResponseWriter, r *http.Request, p Principal) err
             g.name,g.native_id,a.name account_name,b.version FROM group_bindings b JOIN native_groups g ON g.id=b.group_id
             JOIN accounts a ON a.id=b.ai_account_id AND a.workspace='maibot' ORDER BY g.name LIMIT 100`)
 	}
-	return s.list(w, r, p, `SELECT b.*,g.name,g.native_id,a.name account_name
+	return s.list(w, r, p, `SELECT b.*,g.name,g.native_id,coalesce(a.name,'机器人已删除') account_name
         FROM group_bindings b JOIN native_groups g ON g.id=b.group_id
-        JOIN accounts a ON a.id=b.primary_account_id ORDER BY g.name LIMIT 100`)
+        LEFT JOIN accounts a ON a.id=b.primary_account_id ORDER BY g.name LIMIT 100`)
 }
 
 // GroupConfig contains no management chat commands or unbounded regular expressions.
@@ -295,13 +295,17 @@ func (s *Server) updateGroup(w http.ResponseWriter, r *http.Request, p Principal
 	var tenant string
 	var stored []byte
 	var currentVersion int64
-	err = tx.QueryRow(r.Context(), `SELECT tenant_id::text,config,version FROM group_bindings
-        WHERE group_id=$1 FOR UPDATE`, r.PathValue("id")).Scan(&tenant, &stored, &currentVersion)
+	var detached bool
+	err = tx.QueryRow(r.Context(), `SELECT tenant_id::text,config,version,primary_account_id IS NULL FROM group_bindings
+        WHERE group_id=$1 FOR UPDATE`, r.PathValue("id")).Scan(&tenant, &stored, &currentVersion, &detached)
 	if err == pgx.ErrNoRows || (err == nil && p.Role != "superadmin" && tenant != p.TenantID) {
 		return fail(404, "group_not_found")
 	}
 	if err != nil {
 		return err
+	}
+	if detached {
+		return fail(409, "group_robot_removed")
 	}
 	if in.Version != currentVersion {
 		return fail(409, "version_conflict")

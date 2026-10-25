@@ -40,7 +40,7 @@ try {
   await page.getByRole('textbox', { name: '密码', exact: true }).fill(env.BOOTSTRAP_PASSWORD)
   await page.getByRole('button', { name: '登录', exact: true }).click()
   await page.getByRole('heading', { name: '工作台', exact: true }).waitFor()
-  for (const name of ['ui_smoke.js', 'workspaces_ui_smoke.js', 'go_console_live_smoke.js', 'go_console_ui_smoke.js']) {
+  for (const name of ['ui_smoke.js', 'workspaces_ui_smoke.js', 'go_console_live_smoke.js', 'go_console_ui_smoke.js', 'account_removal_ui_smoke.js']) {
     console.log(`Browser check: ${name}`)
     const source = await readFile(`${root}/tools/${name}`, 'utf8')
     const run = vm.runInThisContext(`(${source})`, { filename: name })

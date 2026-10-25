@@ -457,6 +457,19 @@
     clearInput()
     handles.clear()
   })
+  function forgetAccount(id: string) {
+    for (const key of handles.keys()) if (key.endsWith(`:${id}`)) handles.delete(key)
+    if (currentAccount.value?.id !== id) return
+    generation++
+    clearInput()
+    flow.value = {}
+    panel.value = {}
+    createdAccount.value = null
+    robotName.value = ''
+    error.value = ''
+    emit('update:modelValue', false)
+  }
+  defineExpose({ forgetAccount })
 
   async function submit() {
     if (signup.value) {

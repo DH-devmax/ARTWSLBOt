@@ -103,6 +103,15 @@
                   @click="forgetNative(account)"
                   >清除会话</ElButton
                 >
+                <ElTooltip content="删除机器人">
+                  <ElButton
+                    text
+                    type="danger"
+                    :icon="Delete"
+                    :aria-label="`删除机器人 ${account.name}`"
+                    @click="openAccountRemoval(account)"
+                  />
+                </ElTooltip>
               </div>
               <ElEmpty v-if="!data.accounts.length" description="暂无机器人" :image-size="48" />
               <NativeDeployment @updated="refresh" />
@@ -195,6 +204,19 @@
                     }}</span>
                   </template></ElTableColumn
                 >
+                <ElTableColumn v-if="isAdmin" label="操作" width="70">
+                  <template #default="{ row }">
+                    <ElTooltip content="删除机器人">
+                      <ElButton
+                        text
+                        type="danger"
+                        :icon="Delete"
+                        :aria-label="`删除机器人 ${row.name}`"
+                        @click="openAccountRemoval(row)"
+                      />
+                    </ElTooltip>
+                  </template>
+                </ElTableColumn>
               </ElTable>
             </section>
             <section class="data-section"
@@ -836,12 +858,21 @@
     </ElDialog>
     <NativeLogin
       v-if="isAdmin"
+      ref="nativeLogin"
       v-model="nativeLoginOpen"
       :account="nativeTarget"
       :owner="session.user?.id || ''"
       :workspace="session.workspace"
       @updated="refresh"
       @created="accountCreated"
+    />
+    <AccountRemoval
+      v-if="isAdmin"
+      v-model="removalOpen"
+      :account="removalTarget"
+      :owner="session.user?.id || ''"
+      :workspace="session.workspace"
+      @removed="accountRemoved"
     />
   </div>
 </template>
@@ -869,7 +900,8 @@
     Present,
     Checked,
     Key,
-    Switch
+    Switch,
+    Delete
   } from '@element-plus/icons-vue'
   import { api as request, ApiError, type Row } from './api'
   import { useSession } from './store'
@@ -877,6 +909,7 @@
   import NativeLogin from './NativeLogin.vue'
   import MaiBotConsole from './MaiBotConsole.vue'
   import SystemMonitor from './SystemMonitor.vue'
+  import AccountRemoval from './AccountRemoval.vue'
 
   const session = useSession()
   const api = <T,>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal) =>
@@ -886,6 +919,9 @@
   const accessCatalog = ref<Row>({})
   const nativeTarget = ref<Row | null>(null),
     nativeLoginOpen = ref(false)
+  const nativeLogin = ref<InstanceType<typeof NativeLogin>>()
+  const removalTarget = ref<Row | null>(null),
+    removalOpen = ref(false)
   const credentials = reactive({ username: '', password: '' })
   const busy = ref(false),
     loginError = ref(''),
@@ -1135,6 +1171,8 @@
       dialog.open = false
       nativeLoginOpen.value = false
       nativeTarget.value = null
+      removalOpen.value = false
+      removalTarget.value = null
       saving.value = false
       const stored = workspaceViews.get(next)
       for (const key of Object.keys(data)) data[key] = stored?.data[key] || []
@@ -1173,6 +1211,8 @@
       search.value = ''
       viewSearch.clear()
       workspaceViews.clear()
+      removalOpen.value = false
+      removalTarget.value = null
     }
   )
 
@@ -1191,6 +1231,87 @@
   }
   function accountCreated(account: Row) {
     session.selectAccount(account.id)
+    void refresh()
+  }
+  function openAccountRemoval(account: Row) {
+    removalTarget.value = account
+    removalOpen.value = true
+  }
+  function accountRemoved(result: Row, owner: string) {
+    if (owner !== session.user?.id) return
+    controller?.abort()
+    refreshGeneration++
+    mutationGeneration++
+    session.removeAccountData(result.id, result.workspace, result.management_group_ids)
+    nativeLogin.value?.forgetAccount(result.id)
+    const removedScopes = new Set([result.id, ...(result.management_group_ids || [])])
+    if (
+      dialog.scope.split(':').some((part) => removedScopes.has(part)) ||
+      dialog.account === result.id
+    ) {
+      dialog.open = false
+      dialog.scope = ''
+      dialog.account = ''
+      form.value = {}
+    }
+    if (removalTarget.value?.id === result.id) {
+      removalOpen.value = false
+      removalTarget.value = null
+    }
+    if (nativeTarget.value?.id === result.id) {
+      nativeLoginOpen.value = false
+      nativeTarget.value = null
+    }
+    for (const key of viewSearch.keys())
+      if (key.split(':').includes(result.id)) viewSearch.delete(key)
+    workspaceViews.clear()
+    const removedResources = new Set([
+      result.id,
+      ...data.claims.filter((row) => row.account_id === result.id).map((row) => row.id),
+      ...data.operations.filter((row) => row.account_id === result.id).map((row) => row.id)
+    ])
+    data.accounts = data.accounts.filter((row) => row.id !== result.id)
+    for (const key of ['personas', 'claims', 'operations']) {
+      data[key] = data[key].filter((row) => row.account_id !== result.id)
+    }
+    data.groups = data.groups.map((row) =>
+      removedScopes.has(row.group_id)
+        ? {
+            ...row,
+            primary_account_id: null,
+            ai_account_id: null,
+            active: false,
+            management_enabled: false,
+            ai_enabled: false,
+            ai_requested: false,
+            config: {},
+            account_name: '机器人已删除'
+          }
+        : row.ai_account_id === result.id
+          ? { ...row, ai_account_id: null, ai_enabled: false, ai_requested: false }
+          : row
+    )
+    data.tests = data.tests
+      .filter((row) => !(row.account_ids?.length === 1 && row.account_ids[0] === result.id))
+      .map((row) => {
+        if (!row.account_ids?.includes(result.id)) return row
+        const accountEpochs = { ...row.account_epochs }
+        delete accountEpochs[result.id]
+        return {
+          ...row,
+          cancelled: true,
+          account_ids: row.account_ids.filter((id: string) => id !== result.id),
+          account_epochs: accountEpochs
+        }
+      })
+    data.audit = data.audit.filter(
+      (row) =>
+        !removedResources.has(row.resource_id) &&
+        row.detail?.account_id !== result.id &&
+        !row.detail?.account_ids?.includes(result.id) &&
+        !row.detail?.AccountIDs?.includes(result.id)
+    )
+    ElMessage.success('机器人已删除，关联账号数据已清理')
     void refresh()
   }
   function connectionLabel(account: Row) {
