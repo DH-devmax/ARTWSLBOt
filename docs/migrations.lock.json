@@ -8,5 +8,7 @@
   "007_native_signup.sql": "92fb7431d3b58682faa16fb86ca4fb36fed18bb51287fdad5ae08084228f0b83",
   "008_workspaces_access.sql": "e426904c059f7f5d9007d13b5506ab643290d22dab4ed21eb8e000a2e6a393c7",
   "009_console_settings.sql": "548e1455ecc9444645569197dc7df74f20137f21744686b957d073ea393cc88a",
-  "010_account_removal.sql": "83edccbfadfaa67fbbfff5179a4d3ab85bf412411609567af5cb39e070e93220"
+  "010_account_removal.sql": "83edccbfadfaa67fbbfff5179a4d3ab85bf412411609567af5cb39e070e93220",
+  "011_account_dashboard.sql": "07986830f72af4e11c318366f3da787a49dc17b36e08bb2aadd2ad289d5135d8",
+  "012_account_group_sample.sql": "20dc1084cfb9f5bb0939143e801f4ed4daf385bf6220e696db997dae212d3e78"
 }

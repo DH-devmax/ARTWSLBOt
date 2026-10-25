@@ -200,6 +200,7 @@ async (page) => {
     await page.getByRole('button', { name: '关闭面板', exact: true }).click()
     await choose('切换工作台', '旺商聊工作台')
     await navigate('工作台')
+    await choose('机器人面板', '工作台总览')
     await page.locator('.overview-grid').getByText('在线', { exact: true }).waitFor()
     await page.screenshot({ path: 'output/playwright/workspaces-desktop.png', fullPage: true, animations: 'disabled' })
     for (const viewport of [{ width: 320, height: 740 }, { width: 390, height: 844 }, { width: 647, height: 779 }]) {

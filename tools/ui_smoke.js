@@ -10,22 +10,30 @@ async (page) => {
   }
   page.on('request', track)
   try {
+    const chooseOverview = async () => {
+      await page.getByRole('combobox', { name: '机器人面板', exact: true })
+        .locator('xpath=ancestor::div[contains(@class, "el-select__wrapper")]').click()
+      await page.getByRole('option', { name: '工作台总览', exact: true }).click()
+    }
     await page.setViewportSize({ width: 1440, height: 960 })
     await page.goto('http://127.0.0.1:5173/#overview')
     await page.reload()
     const navigation = page.getByRole('navigation', { name: '主导航' })
     await navigation.waitFor()
+    await chooseOverview()
     if (await navigation.getByRole('button', { name: '账号接入', exact: true }).count()) {
       throw new Error('Legacy account menu still exposed')
     }
     const selector = page.getByRole('button', { name: '切换工作台', exact: true })
     if (await selector.count()) {
       await selector.click()
+      await chooseOverview()
       await page.getByRole('heading', { name: '聊天机器人状态', exact: true }).waitFor()
       if (await navigation.getByRole('button', { name: '财务台账', exact: true }).count()) {
         throw new Error('Chat workspace exposes management navigation')
       }
       await selector.click()
+      await chooseOverview()
       await page.getByRole('heading', { name: '群管机器人状态', exact: true }).waitFor()
     }
     await page.screenshot({ path: 'output/playwright/live-workspaces-desktop.png', fullPage: true, animations: 'disabled' })
