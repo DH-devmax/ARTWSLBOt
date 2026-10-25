@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "vite --open",
-    "build": "vue-tsc --noEmit && vite build",
+    "build": "vue-tsc --noEmit -p tsconfig.wsl.json && vite build",
     "serve": "vite preview",
     "lint": "eslint",
     "fix": "eslint --fix",

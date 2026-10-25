@@ -48,5 +48,5 @@ jobs:
       - run: docker compose --profile ops run --rm bootstrap
       - run: docker build -f deploy/browser-test.Dockerfile -t wsl-browser-test:ci .
       - run: docker run --rm --network wsl-platform_default --shm-size=256m -v "$PWD:/workspace:ro" wsl-browser-test:ci
-      - if: always()
+      - if: ${{ always() && hashFiles('.env') != '' }}
         run: docker compose down
