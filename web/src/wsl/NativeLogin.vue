@@ -25,6 +25,7 @@
     <ElAlert
       v-if="error || flow.error"
       :title="error || errorText(flow.error)"
+      :description="error ? '' : diagnosticText"
       type="error"
       :closable="false"
       class="flow-alert"
@@ -301,6 +302,17 @@
     cancelled: '已取消',
     expired: '已过期'
   }
+  const diagnosticText = computed(() => {
+    const details: Record<string, string> = {
+      network_timeout: '网络请求超时，未取得可核验的上游结果。',
+      connection_closed: '上游连接提前关闭，未取得可核验的结果。',
+      network_unavailable: '连接未正常完成，无法确认上游是否处理了请求。'
+    }
+    return (
+      details[flow.value.diagnostic] ||
+      (flow.value.provider_code ? `上游返回码：${flow.value.provider_code}` : '')
+    )
+  })
   const statusLabel = computed(() =>
     initializing.value
       ? '正在准备验证'
@@ -439,6 +451,7 @@
     try {
       const value = await api<Row>(endpoint())
       if (current !== generation) return
+      error.value = ''
       flow.value = value
       if (['authenticated', 'registered'].includes(value.status)) emit('updated')
     } catch (e) {
@@ -577,6 +590,7 @@
     const post = async (validate = '') => {
       if (current !== generation || consumed) return
       consumed = true
+      error.value = ''
       try {
         const value = await api<Row>(originalEndpoint, 'POST', { ...input, captcha: validate })
         if (current === generation) flow.value = value

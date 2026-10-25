@@ -42,6 +42,8 @@ func (f *isolatedSignup) Request(ctx context.Context, route string, in map[strin
 		return nil, &nativeauth.Error{Code: "native_transport_unknown", Submitted: true}
 	case 2:
 		return nil, &nativeauth.Error{Code: "native_invalid_sms", Number: 1010, Submitted: true}
+	case 3:
+		return nil, &nativeauth.Error{Code: "native_dns_fake_ip"}
 	}
 	id, _ := json.Marshal(f.accountID.Load())
 	return map[string]json.RawMessage{"accountId": id}, nil
@@ -168,6 +170,24 @@ func TestPostgresNativeSignup(t *testing.T) {
 	fake.accountID.Store(457)
 	step(retryAccount, retryID, "signup_submit", 202)
 	wait(retryAccount, retryID, "registered")
+
+	fake.outcome.Store(3)
+	dnsAccount, dnsID := start()
+	step(dnsAccount, dnsID, "signup_sms", 202)
+	wait(dnsAccount, dnsID, "signup_sms_required")
+	step(dnsAccount, dnsID, "signup_submit", 202)
+	dnsView := wait(dnsAccount, dnsID, "signup_sms_required")
+	var resultCode string
+	if err := db.Platform.QueryRow(ctx, `SELECT state,result_code FROM native_signup_attempts
+        WHERE account_id=$1`, dnsAccount).Scan(&state, &resultCode); err != nil ||
+		state != "rejected" || resultCode != "native_dns_fake_ip" ||
+		field(t, dnsView, "error") != "native_dns_fake_ip" {
+		t.Fatal("pre-connect rejection became an unknown signup barrier", err)
+	}
+	fake.outcome.Store(0)
+	fake.accountID.Store(459)
+	step(dnsAccount, dnsID, "signup_submit", 202)
+	wait(dnsAccount, dnsID, "registered")
 
 	staleAccount, staleID := start()
 	step(staleAccount, staleID, "signup_sms", 202)
