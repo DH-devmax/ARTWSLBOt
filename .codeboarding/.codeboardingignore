@@ -1,0 +1,23 @@
+# Defense in depth. The runner also constructs a Git-candidate allowlist snapshot.
+.env*
+**/.env*
+**/*_test.go
+**/testdata/**
+**/migrations/**
+**/node_modules/**
+**/vendor/**
+**/dist/**
+**/*.png
+**/*.jpg
+**/*.svg
+**/*.lock
+**/*.sum
+docs/**
+licenses/**
+tools/**
+web/src/views/**
+web/src/components/**
+web/src/router/**
+web/src/assets/**
+var/**
+output/**

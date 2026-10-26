@@ -7,3 +7,8 @@
 /.github/ @DH-devmax
 /deploy/ @DH-devmax
 /compose.yaml @DH-devmax
+/AGENTS.md @DH-devmax
+/docs/architecture.md @DH-devmax
+/docs/architecture/ @DH-devmax
+/tools/architecture/ @DH-devmax
+/.codeboarding/ @DH-devmax

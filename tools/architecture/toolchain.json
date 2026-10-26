@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "codeboarding": {
+    "version": "0.15.2",
+    "source_commit": "80199edc78b837cdea4b6cbecd631743ffe6b8a2",
+    "python": "3.12",
+    "mode": "advisory",
+    "vue_supported": false
+  },
+  "provider": {
+    "base_url": "https://www.sevnx.lol/v1",
+    "model": "deepseek-v4.1-flash",
+    "credential_env": "ARCHITECTURE_OPENAI_API_KEY",
+    "max_analysis_seconds": 600,
+    "max_output_tokens": 4096
+  },
+  "views": ["system", "backend", "frontend", "agents"],
+  "go_build_tags": ["sodium"],
+  "source_roots": ["cmd", "internal", "web/src/wsl"],
+  "protected_documents": ["docs/architecture.md", "docs/architecture/decisions"]
+}

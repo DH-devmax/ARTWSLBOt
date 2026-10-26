@@ -33,3 +33,11 @@ Read `docs/architecture.md` before changing ownership boundaries.
   synthetic protocol fixtures and explicitly authorized isolated native tests.
 - New engine capabilities need scope/concurrency/cancellation tests and an
   updated entry in `docs/maibot-migration.md`. Unadapted plugins stay disabled.
+- Architecture maintenance: run `python tools/architecture/architecture.py update`
+  after structural code changes, then `check` and the existing architecture guard.
+  Run approved CodeBoarding incremental analysis against a trusted baseline;
+  never silently fall back to full analysis. Update only affected Mermaid views.
+  Dependencies require code evidence. Preserve the human ownership contract;
+  report contradictions instead of rewriting decisions. Never send secrets or
+  runtime data to the architecture model or restore caches from untrusted PRs.
+  See `docs/architecture/README.md`.

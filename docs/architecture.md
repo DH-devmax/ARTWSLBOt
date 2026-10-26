@@ -1,5 +1,8 @@
 # Architecture Contract
 
+Source-backed inventories and CI: [`architecture/README.md`](architecture/README.md).
+Generated views do not overwrite the human decisions in this contract.
+
 Decision date: 2026-10-25. This supersedes the former Python-runtime proposal.
 
 ```mermaid
