@@ -49,14 +49,35 @@ def source_manifest():
     return result
 
 
+def incremental_result(stdout):
+    """Upstream cold bootstrap prints progress before its final JSON wire result."""
+    decoder = json.JSONDecoder()
+    results = []
+    for match in re.finditer(r"(?m)^[ \t]*\{", stdout):
+        start = match.end() - 1
+        try:
+            payload, end = decoder.raw_decode(stdout[start:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and (
+            "requiresFullAnalysis" in payload or payload.get("mode") == "incremental"
+        ):
+            results.append((payload, start + end))
+    if len(results) != 1 or stdout[results[0][1]:].strip():
+        raise ValueError("Missing, conflicting or truncated terminal incremental JSON result")
+    return results[0][0]
+
+
 def validate_result(stdout, analysis_path, incremental):
     if incremental:
         # Upstream may report a failure in JSON with process exit status zero.
-        payload = json.loads(stdout)
-        if payload.get("requiresFullAnalysis") or payload.get("error"):
+        payload = incremental_result(stdout)
+        if payload.get("requiresFullAnalysis") or "error" in payload:
             raise ValueError("Incremental analysis unavailable; explicit baseline review required")
         if payload.get("requiresFullAnalysis") is not False:
             raise ValueError("Incomplete incremental result contract")
+        if payload.get("mode") != "incremental" or payload.get("analysis_path") != str(analysis_path):
+            raise ValueError("Incremental result mode or output path mismatch")
     payload = json.loads(analysis_path.read_text())
     if payload.get("error") or not payload.get("components"):
         raise ValueError("Analysis lacks verified component output")
