@@ -19,3 +19,7 @@ test-results/
 web/.env.local
 .playwright-cli/
 output/playwright/
+output/architecture/
+.codeboarding/*.json
+.codeboarding/*.pkl
+.codeboarding/logs/

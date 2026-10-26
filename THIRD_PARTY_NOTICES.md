@@ -1,5 +1,14 @@
 # Third-Party Baselines
 
+Architecture documentation tools are development-only dependencies, isolated
+from production images: CodeBoarding 0.15.2 (AGPL-3.0, reviewed source
+`80199edc78b837cdea4b6cbecd631743ffe6b8a2`), Mermaid CLI 11.12.0 (MIT),
+TypeScript 5.6.3 (Apache-2.0), Vue compiler-sfc 3.5.22 (MIT), PyYAML 6.0.3 (MIT)
+and Puppeteer 23.11.1 (Apache-2.0). Exact transitive distributions and integrity
+hashes are pinned under `tools/architecture`; they are not a completed license
+or vulnerability audit. Source snippets may be sent only to the approved
+architecture provider, never credentials or runtime data.
+
 | Project | Pinned commit | License file | Use |
 | --- | --- | --- | --- |
 | AstrBot fork | a672ef93cb7dbfb854ae01ff131267b9e8a1e050 | LICENSE (AGPL-3.0) | Native protocol port, synthetic compatibility fixtures, behavior reference |

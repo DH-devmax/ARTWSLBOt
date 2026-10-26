@@ -1,0 +1,166 @@
+name: Architecture
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      initialize:
+        description: Explicit first paid CodeBoarding baseline (otherwise incremental)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: architecture-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install isolated documentation dependencies
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "true"
+        run: |
+          python -m pip install --require-hashes -r tools/architecture/requirements-check.lock
+          npm ci --prefix tools/architecture --ignore-scripts --no-audit --no-fund
+      - name: Generate source-backed review candidate
+        run: python tools/architecture/architecture.py update --output output/architecture/candidate
+      - name: Ownership guards and tooling tests
+        run: |
+          python tools/check_architecture.py
+          python -m unittest discover -s tools/architecture -p 'test_*.py'
+      - name: Compare with exact event baseline
+        if: ${{ always() && !cancelled() }}
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          pr_base = os.environ.get("PR_BASE")
+          base = pr_base or os.environ.get("PUSH_BEFORE")
+          if pr_base:
+              try:
+                  base = subprocess.check_output(["git", "merge-base", pr_base, "HEAD"], text=True).strip()
+              except subprocess.CalledProcessError:
+                  base = None
+          elif not base or set(base) == {"0"}:
+              base = None
+          command = ["python", "tools/architecture/architecture.py", "diff",
+                     "--candidate", "output/architecture/candidate/graph.json",
+                     "--output", "output/architecture/diff"]
+          if base:
+              command += ["--base", base]
+          subprocess.run(command, check=True)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write(open("output/architecture/diff/diff.md").read())
+          PY
+      - name: Validate and render Mermaid
+        if: ${{ always() && !cancelled() }}
+        run: |
+          cd tools/architecture
+          npx puppeteer browsers install chrome-headless-shell
+          node render.mjs ../../output/architecture/rendered ../../output/architecture/candidate
+      - name: Committed architecture matches code
+        run: python tools/architecture/architecture.py check
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: architecture-evidence-${{ github.run_id }}
+          path: |
+            output/architecture/candidate/*
+            output/architecture/diff/*
+            output/architecture/rendered/*.svg
+          retention-days: 14
+
+  model:
+    # Never expose credentials to pull_request or pull_request_target code.
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && vars.ARCHITECTURE_MODEL_ENABLED == 'true'))
+    needs: evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    environment: architecture-model
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install locked analysis toolchain
+        run: python -m pip install --require-hashes -r tools/architecture/requirements.lock
+      - name: Prepare private cache parent
+        run: install -d -m 700 "$HOME/.cache/artwslbot/architecture/analysis"
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cache/artwslbot/architecture/analysis/baseline
+            ~/.cache/artwslbot/architecture/analysis/state.json
+          key: architecture-model-${{ runner.os }}-${{ hashFiles('tools/architecture/requirements.lock', 'tools/architecture/toolchain.json', 'tools/architecture/analyze.py', 'tools/architecture/codeboarding_entry.py', '.codeboarding/.codeboardingignore') }}-${{ github.run_id }}
+          restore-keys: |
+            architecture-model-${{ runner.os }}-${{ hashFiles('tools/architecture/requirements.lock', 'tools/architecture/toolchain.json', 'tools/architecture/analyze.py', 'tools/architecture/codeboarding_entry.py', '.codeboarding/.codeboardingignore') }}-
+      - name: Bounded trusted analysis
+        env:
+          ARCHITECTURE_OPENAI_API_KEY: ${{ secrets.ARCHITECTURE_OPENAI_API_KEY }}
+          INITIALIZE: ${{ inputs.initialize }}
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          command = ["python", "tools/architecture/analyze.py"]
+          if os.environ.get("INITIALIZE") == "true":
+              command.append("--initialize")
+          subprocess.run(command, check=True)
+          PY
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cache/artwslbot/architecture/analysis/baseline
+            ~/.cache/artwslbot/architecture/analysis/state.json
+          key: architecture-model-${{ runner.os }}-${{ hashFiles('tools/architecture/requirements.lock', 'tools/architecture/toolchain.json', 'tools/architecture/analyze.py', 'tools/architecture/codeboarding_entry.py', '.codeboarding/.codeboardingignore') }}-${{ github.run_id }}
+      - name: Publish minimal analysis result, never model transcripts or cache
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          report = Path.home() / ".cache/artwslbot/architecture/analysis/last-run.json"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("## CodeBoarding (advisory)\n\n")
+              summary.write("```json\n" + report.read_text() + "\n```\n" if report.exists() else "Analysis did not start; baseline or configuration missing.\n")
+          PY

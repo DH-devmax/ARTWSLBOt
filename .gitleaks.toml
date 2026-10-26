@@ -12,6 +12,13 @@ regexTarget = "secret"
 regexes = ['''^[0-9a-f]{64}$''']
 
 [[rules.allowlists]]
+description = "Source SHA-256 checksums in the generated architecture manifest"
+condition = "AND"
+paths = ['''^docs/architecture/generated/manifest\.json$''']
+regexTarget = "secret"
+regexes = ['''^[0-9a-f]{64}$''']
+
+[[rules.allowlists]]
 description = "Two fixed synthetic financial idempotency keys; never credentials"
 condition = "AND"
 paths = ['''^internal/httpapi/integration_test\.go$''']

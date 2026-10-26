@@ -1,0 +1,1412 @@
+{
+  "build_context": {
+    "CGO_ENABLED": "1",
+    "GOOS": "linux",
+    "tags": [
+      "sodium"
+    ]
+  },
+  "coverage": [
+    {
+      "detail": "Agent view is reviewed interface wiring, not whole-program dispatch analysis.",
+      "kind": "coverage"
+    },
+    {
+      "detail": "Compose dependencies are startup declarations, not observed network calls.",
+      "kind": "coverage"
+    },
+    {
+      "detail": "Management assistant is absent from this revision; no assistant interactions are drawn.",
+      "kind": "coverage"
+    },
+    {
+      "file": "web/src/wsl/App.vue",
+      "kind": "runtime-component-selection"
+    }
+  ],
+  "edges": [
+    {
+      "evidence": [
+        {
+          "line": 189,
+          "path": "internal/heatbot/engine.go",
+          "symbol": "Generate"
+        },
+        {
+          "line": 36,
+          "path": "internal/heatbot/provider.go",
+          "symbol": "Generate"
+        }
+      ],
+      "from": "heatbot",
+      "kind": "Generate interface (endpoint disabled)",
+      "to": "heatbot-provider",
+      "view": "agents"
+    },
+    {
+      "evidence": [
+        {
+          "line": 16,
+          "path": "cmd/heatbot/main.go",
+          "symbol": "wangshangliao/internal/heatbot"
+        }
+      ],
+      "from": "cmd/heatbot",
+      "kind": "imports",
+      "to": "internal/heatbot",
+      "view": "backend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 18,
+          "path": "cmd/wsl/main.go",
+          "symbol": "wangshangliao/internal/database"
+        }
+      ],
+      "from": "cmd/wsl",
+      "kind": "imports",
+      "to": "internal/database",
+      "view": "backend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 19,
+          "path": "cmd/wsl/main.go",
+          "symbol": "wangshangliao/internal/httpapi"
+        }
+      ],
+      "from": "cmd/wsl",
+      "kind": "imports",
+      "to": "internal/httpapi",
+      "view": "backend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 20,
+          "path": "cmd/wsl/main.go",
+          "symbol": "wangshangliao/internal/security"
+        }
+      ],
+      "from": "cmd/wsl",
+      "kind": "imports",
+      "to": "internal/security",
+      "view": "backend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 12,
+          "path": "cmd/wslctl/main.go",
+          "symbol": "wangshangliao/internal/apiclient"
+        }
+      ],
+      "from": "cmd/wslctl",
+      "kind": "imports",
+      "to": "internal/apiclient",
+      "view": "backend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 12,
+          "path": "internal/control/roles.go",
+          "symbol": "wangshangliao/internal/security"
+        }
+      ],
+      "from": "internal/control",
+      "kind": "imports",
+      "to": "internal/security",
+      "view": "backend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 20,
+          "path": "internal/gateway/im_transport.go",
+          "symbol": "wangshangliao/internal/nativeauth"
+        },
+        {
+          "line": 15,
+          "path": "internal/gateway/receiver.go",
+          "symbol": "wangshangliao/internal/nativeauth"
+        },
+        {
+          "line": 17,
+          "path": "internal/gateway/receiver_connection.go",
+          "symbol": "wangshangliao/internal/nativeauth"
+        }
+      ],
+      "from": "internal/gateway",
+      "kind": "imports",
+      "to": "internal/nativeauth",
+      "view": "backend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 21,
+          "path": "internal/gateway/im_transport.go",
+          "symbol": "wangshangliao/internal/nativewire"
+        },
+        {
+          "line": 18,
+          "path": "internal/gateway/receiver_connection.go",
+          "symbol": "wangshangliao/internal/nativewire"
+        }
+      ],
+      "from": "internal/gateway",
+      "kind": "imports",
+      "to": "internal/nativewire",
+      "view": "backend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 11,
+          "path": "internal/gateway/postgres.go",
+          "symbol": "wangshangliao/internal/security"
+        },
+        {
+          "line": 16,
+          "path": "internal/gateway/receiver.go",
+          "symbol": "wangshangliao/internal/security"
+        }
+      ],
+      "from": "internal/gateway",
+      "kind": "imports",
+      "to": "internal/security",
+      "view": "backend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 12,
+          "path": "internal/httpapi/control.go",
+          "symbol": "wangshangliao/internal/control"
+        },
+        {
+          "line": 8,
+          "path": "internal/httpapi/group_ai.go",
+          "symbol": "wangshangliao/internal/control"
+        },
+        {
+          "line": 9,
+          "path": "internal/httpapi/workspaces.go",
+          "symbol": "wangshangliao/internal/control"
+        }
+      ],
+      "from": "internal/httpapi",
+      "kind": "imports",
+      "to": "internal/control",
+      "view": "backend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 20,
+          "path": "internal/httpapi/server.go",
+          "symbol": "wangshangliao/internal/database"
+        }
+      ],
+      "from": "internal/httpapi",
+      "kind": "imports",
+      "to": "internal/database",
+      "view": "backend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 12,
+          "path": "internal/httpapi/native_receiver.go",
+          "symbol": "wangshangliao/internal/gateway"
+        },
+        {
+          "line": 21,
+          "path": "internal/httpapi/server.go",
+          "symbol": "wangshangliao/internal/gateway"
+        }
+      ],
+      "from": "internal/httpapi",
+      "kind": "imports",
+      "to": "internal/gateway",
+      "view": "backend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 22,
+          "path": "internal/httpapi/server.go",
+          "symbol": "wangshangliao/internal/monitor"
+        }
+      ],
+      "from": "internal/httpapi",
+      "kind": "imports",
+      "to": "internal/monitor",
+      "view": "backend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 14,
+          "path": "internal/httpapi/native_auth.go",
+          "symbol": "wangshangliao/internal/nativeauth"
+        },
+        {
+          "line": 11,
+          "path": "internal/httpapi/native_signup.go",
+          "symbol": "wangshangliao/internal/nativeauth"
+        },
+        {
+          "line": 23,
+          "path": "internal/httpapi/server.go",
+          "symbol": "wangshangliao/internal/nativeauth"
+        }
+      ],
+      "from": "internal/httpapi",
+      "kind": "imports",
+      "to": "internal/nativeauth",
+      "view": "backend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 15,
+          "path": "internal/httpapi/native_auth.go",
+          "symbol": "wangshangliao/internal/nativewire"
+        }
+      ],
+      "from": "internal/httpapi",
+      "kind": "imports",
+      "to": "internal/nativewire",
+      "view": "backend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 13,
+          "path": "internal/httpapi/auth.go",
+          "symbol": "wangshangliao/internal/security"
+        },
+        {
+          "line": 13,
+          "path": "internal/httpapi/control.go",
+          "symbol": "wangshangliao/internal/security"
+        },
+        {
+          "line": 16,
+          "path": "internal/httpapi/native_auth.go",
+          "symbol": "wangshangliao/internal/security"
+        },
+        {
+          "line": 12,
+          "path": "internal/httpapi/native_signup.go",
+          "symbol": "wangshangliao/internal/security"
+        },
+        {
+          "line": 11,
+          "path": "internal/httpapi/operations.go",
+          "symbol": "wangshangliao/internal/security"
+        },
+        {
+          "line": 24,
+          "path": "internal/httpapi/server.go",
+          "symbol": "wangshangliao/internal/security"
+        }
+      ],
+      "from": "internal/httpapi",
+      "kind": "imports",
+      "to": "internal/security",
+      "view": "backend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 23,
+          "path": "internal/nativeauth/client.go",
+          "symbol": "wangshangliao/internal/nativewire"
+        },
+        {
+          "line": 19,
+          "path": "internal/nativeauth/config.go",
+          "symbol": "wangshangliao/internal/nativewire"
+        },
+        {
+          "line": 8,
+          "path": "internal/nativeauth/protocol.go",
+          "symbol": "wangshangliao/internal/nativewire"
+        }
+      ],
+      "from": "internal/nativeauth",
+      "kind": "imports",
+      "to": "internal/nativewire",
+      "view": "backend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 15,
+          "path": "internal/nativeauth/manager.go",
+          "symbol": "wangshangliao/internal/security"
+        }
+      ],
+      "from": "internal/nativeauth",
+      "kind": "imports",
+      "to": "internal/security",
+      "view": "backend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 284,
+          "path": "web/src/wsl/AccountDashboard.vue",
+          "symbol": "@element-plus/icons-vue"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/AccountDashboard.vue",
+      "kind": "import",
+      "template_used": true,
+      "to": "npm:@element-plus/icons-vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 286,
+          "path": "web/src/wsl/AccountDashboard.vue",
+          "symbol": "echarts/charts"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/AccountDashboard.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:echarts/charts",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 287,
+          "path": "web/src/wsl/AccountDashboard.vue",
+          "symbol": "echarts/components"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/AccountDashboard.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:echarts/components",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 285,
+          "path": "web/src/wsl/AccountDashboard.vue",
+          "symbol": "echarts/core"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/AccountDashboard.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:echarts/core",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 288,
+          "path": "web/src/wsl/AccountDashboard.vue",
+          "symbol": "echarts/renderers"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/AccountDashboard.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:echarts/renderers",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 283,
+          "path": "web/src/wsl/AccountDashboard.vue",
+          "symbol": "vue"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/AccountDashboard.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 289,
+          "path": "web/src/wsl/AccountDashboard.vue",
+          "symbol": "./api"
+        }
+      ],
+      "external": false,
+      "from": "web/src/wsl/AccountDashboard.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "web/src/wsl/api.ts",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 61,
+          "path": "web/src/wsl/AccountRemoval.vue",
+          "symbol": "vue"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/AccountRemoval.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 62,
+          "path": "web/src/wsl/AccountRemoval.vue",
+          "symbol": "./api"
+        }
+      ],
+      "external": false,
+      "from": "web/src/wsl/AccountRemoval.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "web/src/wsl/api.ts",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 914,
+          "path": "web/src/wsl/App.vue",
+          "symbol": "@element-plus/icons-vue"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/App.vue",
+      "kind": "import",
+      "template_used": true,
+      "to": "npm:@element-plus/icons-vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 891,
+          "path": "web/src/wsl/App.vue",
+          "symbol": "element-plus"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/App.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:element-plus",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 890,
+          "path": "web/src/wsl/App.vue",
+          "symbol": "vue"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/App.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 922,
+          "path": "web/src/wsl/App.vue",
+          "symbol": "./AccountDashboard.vue"
+        }
+      ],
+      "external": false,
+      "from": "web/src/wsl/App.vue",
+      "kind": "import",
+      "template_used": true,
+      "to": "web/src/wsl/AccountDashboard.vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 921,
+          "path": "web/src/wsl/App.vue",
+          "symbol": "./AccountRemoval.vue"
+        }
+      ],
+      "external": false,
+      "from": "web/src/wsl/App.vue",
+      "kind": "import",
+      "template_used": true,
+      "to": "web/src/wsl/AccountRemoval.vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 919,
+          "path": "web/src/wsl/App.vue",
+          "symbol": "./MaiBotConsole.vue"
+        }
+      ],
+      "external": false,
+      "from": "web/src/wsl/App.vue",
+      "kind": "import",
+      "template_used": true,
+      "to": "web/src/wsl/MaiBotConsole.vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 917,
+          "path": "web/src/wsl/App.vue",
+          "symbol": "./NativeDeployment.vue"
+        }
+      ],
+      "external": false,
+      "from": "web/src/wsl/App.vue",
+      "kind": "import",
+      "template_used": true,
+      "to": "web/src/wsl/NativeDeployment.vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 918,
+          "path": "web/src/wsl/App.vue",
+          "symbol": "./NativeLogin.vue"
+        }
+      ],
+      "external": false,
+      "from": "web/src/wsl/App.vue",
+      "kind": "import",
+      "template_used": true,
+      "to": "web/src/wsl/NativeLogin.vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 920,
+          "path": "web/src/wsl/App.vue",
+          "symbol": "./SystemMonitor.vue"
+        }
+      ],
+      "external": false,
+      "from": "web/src/wsl/App.vue",
+      "kind": "import",
+      "template_used": true,
+      "to": "web/src/wsl/SystemMonitor.vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 915,
+          "path": "web/src/wsl/App.vue",
+          "symbol": "./api"
+        }
+      ],
+      "external": false,
+      "from": "web/src/wsl/App.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "web/src/wsl/api.ts",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 916,
+          "path": "web/src/wsl/App.vue",
+          "symbol": "./store"
+        }
+      ],
+      "external": false,
+      "from": "web/src/wsl/App.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "web/src/wsl/store.ts",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 160,
+          "path": "web/src/wsl/MaiBotConsole.vue",
+          "symbol": "@element-plus/icons-vue"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/MaiBotConsole.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:@element-plus/icons-vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 161,
+          "path": "web/src/wsl/MaiBotConsole.vue",
+          "symbol": "element-plus"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/MaiBotConsole.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:element-plus",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 159,
+          "path": "web/src/wsl/MaiBotConsole.vue",
+          "symbol": "vue"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/MaiBotConsole.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 162,
+          "path": "web/src/wsl/MaiBotConsole.vue",
+          "symbol": "./api"
+        }
+      ],
+      "external": false,
+      "from": "web/src/wsl/MaiBotConsole.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "web/src/wsl/api.ts",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 163,
+          "path": "web/src/wsl/MaiBotConsole.vue",
+          "symbol": "./store"
+        }
+      ],
+      "external": false,
+      "from": "web/src/wsl/MaiBotConsole.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "web/src/wsl/store.ts",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 73,
+          "path": "web/src/wsl/NativeDeployment.vue",
+          "symbol": "@element-plus/icons-vue"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/NativeDeployment.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:@element-plus/icons-vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 72,
+          "path": "web/src/wsl/NativeDeployment.vue",
+          "symbol": "vue"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/NativeDeployment.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 74,
+          "path": "web/src/wsl/NativeDeployment.vue",
+          "symbol": "./api"
+        }
+      ],
+      "external": false,
+      "from": "web/src/wsl/NativeDeployment.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "web/src/wsl/api.ts",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 219,
+          "path": "web/src/wsl/NativeLogin.vue",
+          "symbol": "@element-plus/icons-vue"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/NativeLogin.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:@element-plus/icons-vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 218,
+          "path": "web/src/wsl/NativeLogin.vue",
+          "symbol": "vue"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/NativeLogin.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 220,
+          "path": "web/src/wsl/NativeLogin.vue",
+          "symbol": "./api"
+        }
+      ],
+      "external": false,
+      "from": "web/src/wsl/NativeLogin.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "web/src/wsl/api.ts",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 48,
+          "path": "web/src/wsl/SystemMonitor.vue",
+          "symbol": "@element-plus/icons-vue"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/SystemMonitor.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:@element-plus/icons-vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 47,
+          "path": "web/src/wsl/SystemMonitor.vue",
+          "symbol": "vue"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/SystemMonitor.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 49,
+          "path": "web/src/wsl/SystemMonitor.vue",
+          "symbol": "./api"
+        }
+      ],
+      "external": false,
+      "from": "web/src/wsl/SystemMonitor.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "web/src/wsl/api.ts",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 50,
+          "path": "web/src/wsl/SystemMonitor.vue",
+          "symbol": "./store"
+        }
+      ],
+      "external": false,
+      "from": "web/src/wsl/SystemMonitor.vue",
+      "kind": "import",
+      "template_used": false,
+      "to": "web/src/wsl/store.ts",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 3,
+          "path": "web/src/wsl/main.ts",
+          "symbol": "element-plus"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/main.ts",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:element-plus",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 5,
+          "path": "web/src/wsl/main.ts",
+          "symbol": "element-plus/dist/index.css"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/main.ts",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:element-plus/dist/index.css",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 4,
+          "path": "web/src/wsl/main.ts",
+          "symbol": "element-plus/es/locale/lang/zh-cn"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/main.ts",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:element-plus/es/locale/lang/zh-cn",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 2,
+          "path": "web/src/wsl/main.ts",
+          "symbol": "pinia"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/main.ts",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:pinia",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 1,
+          "path": "web/src/wsl/main.ts",
+          "symbol": "vue"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/main.ts",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 6,
+          "path": "web/src/wsl/main.ts",
+          "symbol": "@styles/index.scss"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/main.ts",
+      "kind": "import",
+      "template_used": false,
+      "to": "web/src/assets/styles/index.scss",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 7,
+          "path": "web/src/wsl/main.ts",
+          "symbol": "./App.vue"
+        }
+      ],
+      "external": false,
+      "from": "web/src/wsl/main.ts",
+      "kind": "import",
+      "template_used": false,
+      "to": "web/src/wsl/App.vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 8,
+          "path": "web/src/wsl/main.ts",
+          "symbol": "./style.css"
+        }
+      ],
+      "external": false,
+      "from": "web/src/wsl/main.ts",
+      "kind": "import",
+      "template_used": false,
+      "to": "web/src/wsl/style.css",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 1,
+          "path": "web/src/wsl/store.ts",
+          "symbol": "pinia"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/store.ts",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:pinia",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 2,
+          "path": "web/src/wsl/store.ts",
+          "symbol": "vue"
+        }
+      ],
+      "external": true,
+      "from": "web/src/wsl/store.ts",
+      "kind": "import",
+      "template_used": false,
+      "to": "npm:vue",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 3,
+          "path": "web/src/wsl/store.ts",
+          "symbol": "./api"
+        }
+      ],
+      "external": false,
+      "from": "web/src/wsl/store.ts",
+      "kind": "import",
+      "template_used": false,
+      "to": "web/src/wsl/api.ts",
+      "view": "frontend"
+    },
+    {
+      "evidence": [
+        {
+          "line": 60,
+          "path": "compose.yaml",
+          "symbol": "api.depends_on.migrate"
+        }
+      ],
+      "from": "service:api",
+      "kind": "startup dependency",
+      "to": "service:migrate",
+      "view": "system"
+    },
+    {
+      "evidence": [
+        {
+          "line": 11,
+          "path": "compose.yaml",
+          "symbol": "api.environment.DATABASE_URL"
+        }
+      ],
+      "from": "service:api",
+      "kind": "database endpoint",
+      "to": "service:postgres",
+      "view": "system"
+    },
+    {
+      "evidence": [
+        {
+          "line": 72,
+          "path": "compose.yaml",
+          "symbol": "api.environment.SIMON_URL"
+        }
+      ],
+      "from": "service:api",
+      "kind": "private metrics endpoint",
+      "to": "service:simon",
+      "view": "system"
+    },
+    {
+      "evidence": [
+        {
+          "line": 47,
+          "path": "compose.yaml",
+          "symbol": "bootstrap.depends_on.migrate"
+        }
+      ],
+      "from": "service:bootstrap",
+      "kind": "startup dependency",
+      "to": "service:migrate",
+      "view": "system"
+    },
+    {
+      "evidence": [
+        {
+          "line": 11,
+          "path": "compose.yaml",
+          "symbol": "bootstrap.environment.DATABASE_URL"
+        }
+      ],
+      "from": "service:bootstrap",
+      "kind": "database endpoint",
+      "to": "service:postgres",
+      "view": "system"
+    },
+    {
+      "evidence": [
+        {
+          "line": 11,
+          "path": "compose.yaml",
+          "symbol": "migrate.environment.DATABASE_URL"
+        }
+      ],
+      "from": "service:migrate",
+      "kind": "database endpoint",
+      "to": "service:postgres",
+      "view": "system"
+    },
+    {
+      "evidence": [
+        {
+          "line": 34,
+          "path": "compose.yaml",
+          "symbol": "migrate.depends_on.postgres"
+        }
+      ],
+      "from": "service:migrate",
+      "kind": "startup dependency",
+      "to": "service:postgres",
+      "view": "system"
+    },
+    {
+      "evidence": [
+        {
+          "line": 7,
+          "path": "web/nginx.conf",
+          "symbol": "proxy_pass"
+        },
+        {
+          "line": 11,
+          "path": "web/nginx.conf",
+          "symbol": "proxy_pass"
+        }
+      ],
+      "from": "service:web",
+      "kind": "HTTP proxy",
+      "to": "service:api",
+      "view": "system"
+    },
+    {
+      "evidence": [
+        {
+          "line": 113,
+          "path": "compose.yaml",
+          "symbol": "web.depends_on.api"
+        }
+      ],
+      "from": "service:web",
+      "kind": "startup dependency",
+      "to": "service:api",
+      "view": "system"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "heatbot",
+      "kind": "agent-component",
+      "label": "Heatbot endpoint (generation disabled)",
+      "view": "agents"
+    },
+    {
+      "id": "heatbot-provider",
+      "kind": "agent-component",
+      "label": "Heatbot model adapter (gated)",
+      "view": "agents"
+    },
+    {
+      "id": "cmd/heatbot",
+      "kind": "go-package",
+      "view": "backend"
+    },
+    {
+      "id": "cmd/wsl",
+      "kind": "go-package",
+      "view": "backend"
+    },
+    {
+      "id": "cmd/wslctl",
+      "kind": "go-package",
+      "view": "backend"
+    },
+    {
+      "id": "internal/apiclient",
+      "kind": "go-package",
+      "view": "backend"
+    },
+    {
+      "id": "internal/control",
+      "kind": "go-package",
+      "view": "backend"
+    },
+    {
+      "id": "internal/database",
+      "kind": "go-package",
+      "view": "backend"
+    },
+    {
+      "id": "internal/gateway",
+      "kind": "go-package",
+      "view": "backend"
+    },
+    {
+      "id": "internal/heatbot",
+      "kind": "go-package",
+      "view": "backend"
+    },
+    {
+      "id": "internal/httpapi",
+      "kind": "go-package",
+      "view": "backend"
+    },
+    {
+      "id": "internal/monitor",
+      "kind": "go-package",
+      "view": "backend"
+    },
+    {
+      "id": "internal/nativeauth",
+      "kind": "go-package",
+      "view": "backend"
+    },
+    {
+      "id": "internal/nativewire",
+      "kind": "go-package",
+      "view": "backend"
+    },
+    {
+      "id": "internal/security",
+      "kind": "go-package",
+      "view": "backend"
+    },
+    {
+      "id": "npm:@element-plus/icons-vue",
+      "kind": "external",
+      "view": "frontend"
+    },
+    {
+      "id": "npm:echarts/charts",
+      "kind": "external",
+      "view": "frontend"
+    },
+    {
+      "id": "npm:echarts/components",
+      "kind": "external",
+      "view": "frontend"
+    },
+    {
+      "id": "npm:echarts/core",
+      "kind": "external",
+      "view": "frontend"
+    },
+    {
+      "id": "npm:echarts/renderers",
+      "kind": "external",
+      "view": "frontend"
+    },
+    {
+      "id": "npm:element-plus",
+      "kind": "external",
+      "view": "frontend"
+    },
+    {
+      "id": "npm:element-plus/dist/index.css",
+      "kind": "external",
+      "view": "frontend"
+    },
+    {
+      "id": "npm:element-plus/es/locale/lang/zh-cn",
+      "kind": "external",
+      "view": "frontend"
+    },
+    {
+      "id": "npm:pinia",
+      "kind": "external",
+      "view": "frontend"
+    },
+    {
+      "id": "npm:vue",
+      "kind": "external",
+      "view": "frontend"
+    },
+    {
+      "id": "web/src/assets/styles/index.scss",
+      "kind": "external",
+      "view": "frontend"
+    },
+    {
+      "id": "web/src/wsl/AccountDashboard.vue",
+      "kind": "frontend",
+      "view": "frontend"
+    },
+    {
+      "id": "web/src/wsl/AccountRemoval.vue",
+      "kind": "frontend",
+      "view": "frontend"
+    },
+    {
+      "id": "web/src/wsl/App.vue",
+      "kind": "frontend",
+      "view": "frontend"
+    },
+    {
+      "id": "web/src/wsl/MaiBotConsole.vue",
+      "kind": "frontend",
+      "view": "frontend"
+    },
+    {
+      "id": "web/src/wsl/NativeDeployment.vue",
+      "kind": "frontend",
+      "view": "frontend"
+    },
+    {
+      "id": "web/src/wsl/NativeLogin.vue",
+      "kind": "frontend",
+      "view": "frontend"
+    },
+    {
+      "id": "web/src/wsl/SystemMonitor.vue",
+      "kind": "frontend",
+      "view": "frontend"
+    },
+    {
+      "id": "web/src/wsl/api.ts",
+      "kind": "frontend",
+      "view": "frontend"
+    },
+    {
+      "id": "web/src/wsl/main.ts",
+      "kind": "frontend",
+      "view": "frontend"
+    },
+    {
+      "id": "web/src/wsl/store.ts",
+      "kind": "frontend",
+      "view": "frontend"
+    },
+    {
+      "id": "web/src/wsl/style.css",
+      "kind": "frontend",
+      "view": "frontend"
+    },
+    {
+      "generation_gate": null,
+      "id": "service:api",
+      "kind": "compose-service",
+      "lifecycle": "runtime",
+      "view": "system"
+    },
+    {
+      "generation_gate": null,
+      "id": "service:bootstrap",
+      "kind": "compose-service",
+      "lifecycle": "one-shot",
+      "view": "system"
+    },
+    {
+      "generation_gate": "false",
+      "id": "service:heatbot",
+      "kind": "compose-service",
+      "lifecycle": "runtime",
+      "view": "system"
+    },
+    {
+      "generation_gate": null,
+      "id": "service:migrate",
+      "kind": "compose-service",
+      "lifecycle": "one-shot",
+      "view": "system"
+    },
+    {
+      "generation_gate": null,
+      "id": "service:postgres",
+      "kind": "compose-service",
+      "lifecycle": "runtime",
+      "view": "system"
+    },
+    {
+      "generation_gate": null,
+      "id": "service:simon",
+      "kind": "compose-service",
+      "lifecycle": "runtime",
+      "view": "system"
+    },
+    {
+      "generation_gate": null,
+      "id": "service:web",
+      "kind": "compose-service",
+      "lifecycle": "runtime",
+      "view": "system"
+    }
+  ],
+  "schema_version": 1
+}
