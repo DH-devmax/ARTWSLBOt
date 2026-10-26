@@ -30,3 +30,19 @@ checked against all Git-candidate files and was absent.
 
 Remote run identifiers and observed results are appended after execution;
 publication alone does not count as a successful run.
+
+## Cold-run incremental framing fix
+
+Initial remote baseline run `40397921599` passed (one provider request,
+11,909 supplier-reported tokens). Restored incremental run `40398489211`
+failed before any provider request: pinned upstream bootstrap emits human
+installation progress on stdout before the CLI JSON result on a fresh runner.
+Warm local tests had not exercised that output shape.
+
+The adapter now accepts exactly one terminal incremental wire result after
+progress output, validates mode/output path and rejects conflicting results,
+truncation and full-analysis/error signals. It does not suppress failures,
+change provider limits or introduce retries. Automatic model analysis was
+disabled immediately after the failed recovery check. Runner fingerprints
+change, so a fresh baseline requires explicit initialization; the old trusted
+cache is preserved, not relabeled or promoted.

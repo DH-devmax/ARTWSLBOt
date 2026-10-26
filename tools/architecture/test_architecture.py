@@ -73,8 +73,34 @@ class ArchitectureTests(unittest.TestCase):
             for stdout in ('{"requiresFullAnalysis":true}', '{"error":"bad"}', '{}'):
                 with self.assertRaises(ValueError):
                     analyze.validate_result(stdout, path, True)
-            result = analyze.validate_result('{"requiresFullAnalysis":false}', path, True)
+            result = analyze.validate_result(json.dumps({
+                "mode": "incremental", "requiresFullAnalysis": False, "analysis_path": str(path)
+            }), path, True)
             self.assertEqual(len(result["components"]), 1)
+
+    def test_incremental_cold_bootstrap_progress_before_wire_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text('{"components":[{"id":"1"}]}')
+            wire = {"mode": "incremental", "requiresFullAnalysis": False, "analysis_path": str(path)}
+            stdout = "Step: npm check started\nStep: npm check finished: success\n" + json.dumps(wire, indent=2) + "\n"
+            self.assertEqual(len(analyze.validate_result(stdout, path, True)["components"]), 1)
+
+    def test_incremental_rejects_missing_trailing_or_conflicting_results(self):
+        success = json.dumps({"mode": "incremental", "requiresFullAnalysis": False})
+        for stdout in ("", "Step: npm check started\n", success + "\ntruncated output",
+                       '{"requiresFullAnalysis":true}\n' + success):
+            with self.subTest(stdout=stdout), self.assertRaises(ValueError):
+                analyze.incremental_result(stdout)
+
+    def test_incremental_rejects_wrong_mode_or_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text('{"components":[{"id":"1"}]}')
+            for mode, location in (("full", str(path)), ("incremental", "/other/analysis.json")):
+                wire = {"mode": mode, "requiresFullAnalysis": False, "analysis_path": location}
+                with self.subTest(mode=mode, location=location), self.assertRaises(ValueError):
+                    analyze.validate_result(json.dumps(wire), path, True)
 
     def test_failed_promotion_preserves_old_baseline(self):
         with tempfile.TemporaryDirectory() as directory:
