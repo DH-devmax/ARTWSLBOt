@@ -8,7 +8,7 @@ COPY internal ./internal
 RUN CGO_ENABLED=1 go build -tags sodium -trimpath -o /wsl ./cmd/wsl \
     && CGO_ENABLED=0 go build -trimpath -o /heatbot ./cmd/heatbot \
     && CGO_ENABLED=0 go build -trimpath -o /wslctl ./cmd/wslctl
-FROM alpine:3.22
+FROM alpine:3.24
 RUN apk add --no-cache ca-certificates libsodium && addgroup -S wsl && adduser -S -G wsl wsl
 COPY --from=build /wsl /usr/local/bin/wsl
 COPY --from=build /heatbot /usr/local/bin/heatbot
