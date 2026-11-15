@@ -1,4 +1,4 @@
-FROM node:22-alpine
+FROM node:26-alpine
 WORKDIR /workspace/web
 ENV NODE_ENV=development
 ENV NODE_OPTIONS=--max-old-space-size=384 \
