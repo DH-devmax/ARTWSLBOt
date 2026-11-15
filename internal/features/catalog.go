@@ -199,7 +199,7 @@ func Apply(config *Config, id, field string, raw json.RawMessage) error {
 				options.AdminOnly = value
 			}
 		}
-		next.FeatureOptions = make(map[string]Options, len(config.FeatureOptions)+1)
+		next.FeatureOptions = make(map[string]Options, len(config.FeatureOptions))
 		for key, value := range config.FeatureOptions {
 			next.FeatureOptions[key] = value
 		}

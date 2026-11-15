@@ -16,7 +16,8 @@ SUFFIXES = {".json", ".cover", ".md", ".mmd", ".sarif", ".svg"}
 REQUIRED = {
     "quality": {"format/lint.json", "staticcheck/lint.json", "ruff/lint.json",
                 "python/report.json"},
-    "unit": {"report.json", "unit.cover", "unit.cover.meta.json"},
+    "unit": {"report.json", "unit.cover", "unit.cover.meta.json",
+             "gopsutil-boundaries.json"},
     "database": {"report.json", *(
         f"database-{package}{suffix}" for package in ("control", "httpapi", "gateway")
         for suffix in (".cover", ".cover.meta.json"))},
@@ -38,6 +39,17 @@ def complete(job, files):
         raise ValueError("Missing rendered architecture evidence")
 
 
+def validate_content(path, sha):
+    if path.name in {"report.json", "lint.json"}:
+        report = load_json(path)
+        if not isinstance(report, dict) or report.get("sha") != sha or report.get("status") != "passed":
+            raise ValueError("Failed or stale profile evidence")
+    elif path.name == "gopsutil-boundaries.json":
+        if load_json(path) != {"schema": 1, "sha": sha,
+                              "check": "gopsutil-boundaries", "status": "passed"}:
+            raise ValueError("Failed or stale metrics dependency evidence")
+
+
 def record(job, folder, sha):
     files = {}
     for path in sorted(folder.rglob("*")):
@@ -47,10 +59,7 @@ def record(job, folder, sha):
         if (path.is_symlink() or path.suffix not in SUFFIXES
                 or any(part.startswith(".") for part in relative.parts)):
             raise ValueError("Unapproved report artifact")
-        if path.name in {"report.json", "lint.json"}:
-            report = load_json(path)
-            if report.get("sha") != sha or report.get("status") != "passed":
-                raise ValueError("Failed or stale profile evidence")
+        validate_content(path, sha)
         files[relative.as_posix()] = digest(path)
     if not files:
         raise ValueError("Missing job evidence")
@@ -75,6 +84,7 @@ def verify(value, folder, sha):
             raise ValueError("Invalid artifact integrity metadata")
         if digest(actual) != expected:
             raise ValueError("Artifact integrity failure")
+        validate_content(actual, sha)
     return value["job"]
 
 

@@ -156,7 +156,7 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("X-Request-ID", requestID)
 		defer func() {
 			if recover() != nil {
-				slog.Error("request panic", "request_id", requestID, "path", r.URL.Path)
+				slog.Error("request panic", "request_id", requestID)
 				sendError(w, fail(500, "internal_error"))
 			}
 		}()

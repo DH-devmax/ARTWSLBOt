@@ -177,7 +177,7 @@ func (p *Process) UsernameWithContext(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if len(uids) > 0 {
-		u, err := user.LookupId(strconv.Itoa(int(uids[0])))
+		u, err := user.LookupId(strconv.FormatUint(uint64(uids[0]), 10))
 		if err != nil {
 			return "", err
 		}

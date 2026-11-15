@@ -19,7 +19,7 @@ jobs:
   images:
     needs: verify
     if: github.repository == 'DH-devmax/ARTWSLBOt' && github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: release
     permissions:

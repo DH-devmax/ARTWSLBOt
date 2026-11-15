@@ -101,9 +101,14 @@ async (page) => {
       if (id !== a || !path.includes(key) || request.headers()['x-workspace'] !== 'wsl')
         throw new Error('Recall read lost account/conversation scope')
       recallReads++
-      data = { items: [{ id: '43:0', received_at: now,
-        notice: { client_id: 'synthetic-original-id', actor: '<img src=x onerror=alert(1)>' } }],
-        scanned: 12, next_before: '', read_only: true }
+      const before = url.searchParams.get('before')
+      if (url.search || before !== null) {
+        if (url.search !== '?before=43' || before !== '43')
+          throw new Error('Recall pagination lost its server cursor')
+      }
+      data = { items: [{ id: before ? '42:0' : '43:0', received_at: now,
+        notice: { client_id: before ? 'synthetic-older-id' : 'synthetic-original-id', actor: '<img src=x onerror=alert(1)>' } }],
+        scanned: 12, next_before: before ? '' : '43', read_only: true }
     } else if (path.endsWith('/messages')) {
       const body = path.includes(privateKey) ? privateContent : content
       data = { items: [
@@ -181,6 +186,12 @@ async (page) => {
     await recalls.getByText('操作账号 · <img src=x onerror=alert(1)>', { exact: true }).waitFor()
     if (await recalls.locator('img').count() || recallReads !== 1 || writes)
       throw new Error('Recall read rendered HTML or submitted a native action')
+    await recalls.getByRole('button', { name: '继续核对更早记录', exact: true }).click()
+    await recalls.getByText('原消息 · synthetic-older-id', { exact: true }).waitFor()
+    await recalls.getByText('原消息 · synthetic-original-id', { exact: true }).waitFor()
+    if (await recalls.getByRole('button', { name: '继续核对更早记录', exact: true }).count() ||
+        await recalls.locator('li').count() !== 2 || recallReads !== 2 || writes)
+      throw new Error('Recall pagination failed to merge or stop at the last cursor')
     for (const width of [320, 390, 647, 1440]) {
       await page.setViewportSize({ width, height: 779 })
       await recalls.evaluate(el => Promise.all(el.getAnimations({ subtree: true })
@@ -192,8 +203,12 @@ async (page) => {
     }
     await recalls.getByRole('button', { name: '刷新撤回通知', exact: true }).click()
     await recalls.getByText('本次核对 12 条原始记录，扫描有界', { exact: true }).waitFor()
+    await recalls.getByRole('button', { name: '继续核对更早记录', exact: true }).waitFor()
+    if (await recalls.getByText('原消息 · synthetic-older-id', { exact: true }).count() ||
+        await recalls.locator('li').count() !== 1)
+      throw new Error('Recall refresh retained an older page')
     await recalls.getByRole('button', { name: '关闭', exact: true }).click()
-    if (recallReads !== 2 || writes) throw new Error('Recall refresh was missing or performed a write')
+    if (recallReads !== 3 || writes) throw new Error('Recall refresh was missing or performed a write')
     await center.locator('article').getByText(content.message.text, { exact: true }).waitFor()
     await page.setViewportSize({ width: 1440, height: 960 })
     if (await center.getByRole('tab', { name: '解码健康', exact: true }).count()) throw new Error('Health still occupies a full tab')
@@ -431,7 +446,7 @@ async (page) => {
         throw new Error(`Native controls leaked to tenant mobile menu: ${name}`)
     await page.screenshot({ path: 'output/playwright/messages-user-menu-320.png' })
     await page.keyboard.press('Escape')
-    return { passed: true, read_only: true, recall_reads: recallReads, recalls_escaped_and_scoped: true,
+    return { passed: true, read_only: true, recall_reads: recallReads, recalls_escaped_and_scoped: true, recalls_paginated: true,
       native_style_layout: true, compact_decode_popover: true,
       viewports: 4, mobile_borderless: true, single_row_topbar: true, mobile_overflow_actions: true,
       mobile_list_thread_navigation: true, scope_fencing: true, tenant_menu_hidden: true,

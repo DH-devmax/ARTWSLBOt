@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.ci.common import write_json
+from tools.ci.common import digest, load_json, write_json
 from tools.ci.evidence import JOBS, REQUIRED, record
 from tools.ci.foundation import validate
 
@@ -26,7 +26,10 @@ class FoundationTests(unittest.TestCase):
             path = folder / filename
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.suffix == ".json":
-                write_json(path, {"sha": SHA, "status": "passed"})
+                value = {"sha": SHA, "status": "passed"}
+                if filename == "gopsutil-boundaries.json":
+                    value.update(schema=1, check="gopsutil-boundaries")
+                write_json(path, value)
             else:
                 path.write_text("synthetic")
         if job == "architecture":
@@ -53,6 +56,36 @@ class FoundationTests(unittest.TestCase):
         (self.root / "database/job-report.json").unlink()
         with self.assertRaises(ValueError):
             validate(self.needs, self.root, SHA)
+
+    def test_local_metrics_dependency_regression_is_required(self):
+        (self.root / "unit/gopsutil-boundaries.json").unlink()
+        with self.assertRaises(ValueError):
+            record("unit", self.root / "unit", SHA)
+
+    def test_invalid_metrics_dependency_receipt_cannot_be_recorded(self):
+        path = self.root / "unit/gopsutil-boundaries.json"
+        valid = load_json(path)
+        for change in ({"sha": "b" * 40}, {"status": "failed"}, {"schema": 0},
+                       {"check": "unrelated"}, None):
+            with self.subTest(change=change):
+                write_json(path, {} if change is None else valid | change)
+                with self.assertRaises(ValueError):
+                    record("unit", self.root / "unit", SHA)
+
+    def test_rehashed_invalid_metrics_dependency_receipt_cannot_pass(self):
+        folder = self.root / "unit"
+        path = folder / "gopsutil-boundaries.json"
+        valid = load_json(path)
+        receipt_path = folder / "job-report.json"
+        for change in ({"sha": "b" * 40}, {"status": "failed"}, {"schema": 0},
+                       {"check": "unrelated"}, None):
+            with self.subTest(change=change):
+                write_json(path, {} if change is None else valid | change)
+                receipt = load_json(receipt_path)
+                receipt["files"][path.name] = digest(path)
+                write_json(receipt_path, receipt)
+                with self.assertRaises(ValueError):
+                    validate(self.needs, self.root, SHA)
 
     def test_stale_source_and_tampered_report_fail(self):
         with self.assertRaises(ValueError):

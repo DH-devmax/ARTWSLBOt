@@ -87,6 +87,23 @@ async (page) => {
     await page.getByRole('option', { name, exact: true }).click()
   }
   await page.setViewportSize({ width: 1440, height: 960 })
+  const hostileHashes = ['__proto__', 'constructor', 'ledger/../users', 'ledger?admin=true', 'ledger%2f..%2fusers']
+  const safeStartupReads = new Set(['/me', '/workspaces', '/user-center', '/user-center/groups', '/user-center/usage'])
+  for (const hash of hostileHashes) {
+    reads = []
+    await boot(hash)
+    await page.getByRole('heading', { name: '用户中心', exact: true }).waitFor()
+    if (!page.url().endsWith('#overview') || reads.some(path => !safeStartupReads.has(path)))
+      throw new Error('Untrusted startup hash selected an API path: ' + hash)
+    await page.evaluate(hash => new Promise(resolve => {
+      window.addEventListener('hashchange', () => requestAnimationFrame(() => requestAnimationFrame(resolve)), { once: true })
+      location.hash = hash
+    }), hash)
+    await page.getByRole('heading', { name: '用户中心', exact: true }).waitFor()
+    if (await page.getByRole('button', { name: '返回业务模块', exact: true }).count() ||
+        reads.some(path => !safeStartupReads.has(path)))
+      throw new Error('Untrusted hash change selected a business projection: ' + hash)
+  }
   await boot()
   await page.locator('.uc-groups').getByRole('row').filter({ hasText: '业务群1' })
     .getByRole('button', { name: '群功能', exact: true }).click()
@@ -211,7 +228,7 @@ async (page) => {
   await page.getByRole('button', { name: '辣椒聊机器人', exact: true, pressed: true }).click()
   if (reads.some(path => path === '/ledger' || path === '/activities' || path.includes('/features'))) throw new Error('WSL business leaked into Chili')
   if (writes) throw new Error('Navigation caused business effects')
-  return { passed: true, nestedModules: true, selectedGroupAndAccount: true, lateResponseIsolation: true, businessOnlyRoles: true, legacyRoutes: true, platformIsolation: true, viewports: [320, 390, 647, 1440], writes: 0 }
+  return { passed: true, nestedModules: true, selectedGroupAndAccount: true, lateResponseIsolation: true, businessOnlyRoles: true, legacyRoutes: true, platformIsolation: true, untrustedHashes: hostileHashes.length, viewports: [320, 390, 647, 1440], writes: 0 }
   } finally {
     for (const delayed of pending) delayed.release()
     await page.unroute('**/api/v1/**', handler)

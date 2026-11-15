@@ -35,7 +35,10 @@ class ReleaseTests(unittest.TestCase):
                 if job == "images":
                     shutil.copyfile(archive_folder / filename, path)
                 elif path.suffix == ".json":
-                    write_json(path, {"sha": self.sha, "status": "passed"})
+                    value = {"sha": self.sha, "status": "passed"}
+                    if filename == "gopsutil-boundaries.json":
+                        value.update(schema=1, check="gopsutil-boundaries")
+                    write_json(path, value)
                 else:
                     path.write_text("synthetic")
             if job == "architecture":

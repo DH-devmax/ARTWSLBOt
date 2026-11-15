@@ -18,7 +18,7 @@ from tools.ci.security import codeql_findings, scan_codeql, vulnerabilities
 
 def codeql_sarif(language, findings=None):
     return {"version": "2.1.0", "runs": [{
-        "tool": {"driver": {"name": "CodeQL", "version": "2.27.4"}},
+        "tool": {"driver": {"name": "CodeQL", "semanticVersion": "2.27.4"}},
         "automationDetails": {"id": f"security/{language}/"},
         "invocations": [{"executionSuccessful": True}],
         "results": [] if findings is None else findings}]}
@@ -96,7 +96,7 @@ class ScannerTests(unittest.TestCase):
             write_json(paths[0], codeql_sarif("go"))
             clean = codeql_sarif("javascript")
             bad_version = copy.deepcopy(clean)
-            bad_version["runs"][0]["tool"]["driver"]["version"] = "0.0.0"
+            bad_version["runs"][0]["tool"]["driver"]["semanticVersion"] = "0.0.0"
             for changes in ({"invocations": []}, {"results": None},
                             {"automationDetails": {}},
                             {"invocations": [{"executionSuccessful": True,
@@ -109,6 +109,141 @@ class ScannerTests(unittest.TestCase):
             write_json(paths[1], bad_version)
             with self.assertRaises(ValueError):
                 codeql_findings(paths)
+
+    def test_actual_cli_semantic_version_takes_precedence_with_trailing_category(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = [Path(temporary) / f"{language}.sarif" for language in ("go", "javascript")]
+            write_json(paths[0], codeql_sarif("go"))
+            for fields in ({"semanticVersion": "2.27.4"}, {"version": "2.27.4"},
+                           {"semanticVersion": "2.27.4", "version": "CodeQL CLI build label"}):
+                value = codeql_sarif("javascript")
+                value["runs"][0]["tool"]["driver"] = {"name": "CodeQL", **fields}
+                write_json(paths[1], value)
+                with self.subTest(fields=fields):
+                    self.assertEqual([], codeql_findings(paths))
+            for fields in ({}, {"semanticVersion": None, "version": "2.27.4"},
+                           {"semanticVersion": "0.0.0", "version": "2.27.4"}):
+                value["runs"][0]["tool"]["driver"] = {"name": "CodeQL", **fields}
+                write_json(paths[1], value)
+                with self.subTest(fields=fields), self.assertRaises(ValueError):
+                    codeql_findings(paths)
+
+
+def protocol_md5_results():
+    return [{"ruleId": "go/weak-sensitive-data-hashing", "locations": [{
+        "physicalLocation": {
+            "artifactLocation": {"uri": path, "uriBaseId": "%SRCROOT%"},
+            "region": {"startLine": line, "startColumn": start, "endColumn": end}}}]}
+        for path, line, start, end in (
+            ("internal/lajiaoliao/client.go", 299, 18, 34),
+            ("internal/lajiaoliao/security.go", 110, 19, 38))]
+
+
+class ProtocolContractTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.folder = Path(self.temporary.name) / "security/codeql"
+        self.folder.mkdir(parents=True)
+        self.paths = [self.folder / f"{language}.sarif" for language in ("go", "javascript")]
+        write_json(self.paths[0], codeql_sarif("go", protocol_md5_results()))
+        write_json(self.paths[1], codeql_sarif("javascript"))
+
+    def test_only_two_reviewed_wire_operations_can_pass_with_a_complete_audit(self):
+        self.assertEqual(["go:go/weak-sensitive-data-hashing"], codeql_findings(self.paths))
+        audit = []
+        self.assertEqual([], codeql_findings(self.paths, protocol_audit=audit))
+        self.assertEqual(2, len(audit))
+        for expected, item in zip(security.PROTOCOL_MD5_CONTRACTS, audit):
+            for key in ("file", "function", "source_sha256", "rule", "reason", "evidence"):
+                self.assertEqual(expected[key], item[key])
+            self.assertEqual(1, item["count"])
+
+    def test_rule_path_region_language_and_count_near_misses_still_block(self):
+        for index in range(2):
+            for change in ("rule", "path", "base", "line", "column", "span", "locations", "duplicate"):
+                findings = protocol_md5_results()
+                finding = findings[index]
+                location = finding["locations"][0]["physicalLocation"]
+                if change == "rule":
+                    finding["ruleId"] = "go/log-injection"
+                elif change == "path":
+                    location["artifactLocation"]["uri"] = "internal/other/password.go"
+                elif change == "base":
+                    location["artifactLocation"]["uriBaseId"] = "%OTHER%"
+                elif change == "line":
+                    location["region"]["startLine"] += 1
+                elif change == "column":
+                    location["region"]["startColumn"] += 1
+                elif change == "span":
+                    location["region"]["endLine"] = location["region"]["startLine"] + 1
+                elif change == "locations":
+                    finding["locations"].append(copy.deepcopy(finding["locations"][0]))
+                else:
+                    findings.append(copy.deepcopy(finding))
+                write_json(self.paths[0], codeql_sarif("go", findings))
+                audit = []
+                with self.subTest(index=index, change=change):
+                    self.assertTrue(codeql_findings(self.paths, protocol_audit=audit))
+                    self.assertEqual(1, len(audit))
+        write_json(self.paths[0], codeql_sarif("go"))
+        write_json(self.paths[1], codeql_sarif("javascript", protocol_md5_results()))
+        self.assertEqual(["javascript:go/weak-sensitive-data-hashing"],
+                         codeql_findings(self.paths, protocol_audit=[]))
+
+    def test_function_source_drift_disables_the_exception(self):
+        root = self.folder / "changed-source"
+        for contract in security.PROTOCOL_MD5_CONTRACTS:
+            path = root / contract["file"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            source = (ROOT / contract["file"]).read_text()
+            path.write_text(source.replace("md5.Sum(", "md5.Sum( /* changed */ ", 1))
+        with patch.object(security, "ROOT", root):
+            audit = []
+            self.assertTrue(codeql_findings(self.paths, protocol_audit=audit))
+            self.assertEqual([], audit)
+
+    def test_vendor_and_other_first_party_findings_are_never_exempted(self):
+        for path, rule in (("third_party/gopsutil/cpu/cpu_linux.go", "go/incorrect-integer-conversion"),
+                           ("internal/httpapi/server.go", "go/log-injection"),
+                           ("internal/other/password.go", "go/weak-sensitive-data-hashing")):
+            findings = protocol_md5_results()
+            extra = copy.deepcopy(findings[0])
+            extra["ruleId"] = rule
+            extra["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] = path
+            write_json(self.paths[0], codeql_sarif("go", [*findings, extra]))
+            audit = []
+            with self.subTest(path=path, rule=rule):
+                self.assertEqual([f"go:{rule}"], codeql_findings(self.paths, protocol_audit=audit))
+                self.assertEqual(2, len(audit))
+
+    def test_report_audits_exceptions_without_modifying_raw_sarif_and_new_issue_blocks_receipt(self):
+        original = [path.read_bytes() for path in self.paths]
+        for extra in (False, True):
+            findings = protocol_md5_results()
+            if extra:
+                findings.append({"ruleId": "go/log-injection"})
+            write_json(self.paths[0], codeql_sarif("go", findings))
+            with patch("sys.argv", ["security.py", "codeql", "--output", str(self.folder)]), \
+                    patch("tools.ci.common.revision", return_value="a" * 40), \
+                    redirect_stdout(io.StringIO()):
+                self.assertEqual(int(extra), security.main())
+            value = load_json(self.folder / "report.json")
+            case = value["cases"][0]
+            self.assertEqual("new_security_findings" if extra else "ok", case["code"])
+            self.assertEqual(2, len(case["audited_protocol_findings"]))
+            self.assertEqual("failed" if extra else "passed", value["status"])
+            write_json(self.folder.parent / "vulnerabilities/report.json",
+                       {"sha": "a" * 40, "status": "passed"})
+            if extra:
+                with self.assertRaises(ValueError):
+                    record("security", self.folder.parent, "a" * 40)
+            else:
+                receipt = record("security", self.folder.parent, "a" * 40)
+                self.assertIn("codeql/go.sarif", receipt["files"])
+                self.assertIn("codeql/javascript.sarif", receipt["files"])
+            if not extra:
+                self.assertEqual(original, [path.read_bytes() for path in self.paths])
 
 
 class CodeQLExecutionTests(unittest.TestCase):

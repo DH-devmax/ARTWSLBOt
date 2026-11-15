@@ -2599,19 +2599,25 @@
     businessController?.abort()
     const active = new AbortController(),
       scope = businessReadScope.value,
-      kind = page.value,
+      kind = page.value === 'ledger' ? 'ledger' : page.value === 'activities' ? 'activities' : null,
       workspace = session.workspace
     businessController = active
     const current = () => !active.signal.aborted && scope === businessReadScope.value
     data.ledger = []
     data.activities = []
     businessLoading.value = false
-    if (!session.user || !isUserCenter.value || !isBusinessDetail.value || !canPage(kind)) return
+    if (!session.user || !isUserCenter.value || !kind || !canPage(kind)) return
     businessLoading.value = true
     loadError.value = ''
     try {
       const [rows, groups] = await Promise.all([
-        request<Row[]>(`/${kind}`, 'GET', undefined, active.signal, workspace),
+        request<Row[]>(
+          kind === 'ledger' ? '/ledger' : '/activities',
+          'GET',
+          undefined,
+          active.signal,
+          workspace
+        ),
         can('groups:read')
           ? request<Row[]>('/groups', 'GET', undefined, active.signal, workspace)
           : Promise.resolve(null)

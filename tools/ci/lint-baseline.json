@@ -108,13 +108,6 @@
     },
     {
       "tool": "prettier",
-      "file": "web/src/wsl/NativeRecalls.vue",
-      "rule": "format",
-      "code_fingerprint": "fee0e4ca21c4d4c759f1954bcc7b6399a66c6c57f5552d28673192810b48f7be",
-      "count": 1
-    },
-    {
-      "tool": "prettier",
       "file": "web/src/wsl/SystemMonitor.vue",
       "rule": "format",
       "code_fingerprint": "65dfcf8981ad222bb4675f12d4acb5099379715d2f6485b4dff7f2a5d754f189",

@@ -298,8 +298,7 @@ ENABLE_NATIVE=false
 		return fmt.Errorf("refusing to overwrite .env: %w", err)
 	}
 	if _, err = f.WriteString(content); err != nil {
-		f.Close()
-		return err
+		return errors.Join(err, f.Close())
 	}
 	if err = f.Close(); err != nil {
 		return err

@@ -19,7 +19,7 @@ env:
   GOFLAGS: -mod=readonly
 jobs:
   quality:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -61,7 +61,7 @@ jobs:
           if-no-files-found: error
 
   unit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -70,6 +70,10 @@ jobs:
       - uses: ./.github/actions/ci-toolchain
       - name: Discover and execute every Go test with race and sodium
         run: python3 tools/ci/go_tests.py --profile unit --output output/ci/unit
+      - name: Synthetic bounds checks in the local metrics dependency
+        run: |
+          go test -race -tags sodium -count=1 github.com/shirou/gopsutil/v4/cpu github.com/shirou/gopsutil/v4/mem
+          python3 tools/ci/check.py --name gopsutil-boundaries --output output/ci/unit/gopsutil-boundaries.json
       - run: python3 tools/ci/evidence.py --job unit --directory output/ci/unit
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
@@ -80,7 +84,7 @@ jobs:
           if-no-files-found: error
 
   images:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -116,7 +120,7 @@ jobs:
 
   database:
     needs: images
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
       WSL_API_IMAGE: wsl-api:ci
@@ -135,7 +139,8 @@ jobs:
           python3 tools/ci/images.py load --component api --directory output/images
           docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace wsl-api:ci init
           python3 tools/ci_smoke_setup.py prepare
-          docker compose up -d --wait postgres
+      - name: Start only the isolated PostgreSQL fixture
+        run: docker compose up -d --wait postgres
       - name: Serial control, HTTP and gateway database tests
         run: python3 tools/ci/go_tests.py --profile database --output output/ci/database
       - run: python3 tools/ci/evidence.py --job database --directory output/ci/database
@@ -151,7 +156,7 @@ jobs:
           if-no-files-found: error
 
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -180,13 +185,14 @@ jobs:
 
   browser:
     needs: images
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       WSL_API_IMAGE: wsl-api:ci
       WSL_WEB_IMAGE: wsl-web:ci
       WSL_SMOKE_API_IMAGE: wsl-api:ci
       WSL_SMOKE_WEB_IMAGE: wsl-web:ci
+      WSL_SMOKE_EXPECT_CHILI_MEDIA: "1"
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -214,13 +220,16 @@ jobs:
           node tools/ci/browser.mjs
       - name: Container contracts on a separate fresh wsl_test
         run: |
+          docker pull postgres:17.6-alpine
           docker build -f deploy/test.Dockerfile -t wsl-test:ci .
           python3 tools/container_smoke.py
           python3 tools/ci/check.py --name container-smoke --output output/ci/browser/container.json
-      - name: Authenticated website smoke on fresh Compose fixtures
+      - name: Prepare isolated authenticated website fixtures
         run: |
           docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace wsl-api:ci init
           python3 tools/ci_smoke_setup.py prepare
+      - name: Authenticated website smoke on fresh Compose fixtures
+        run: |
           docker compose up -d --wait
           docker compose --profile ops run --rm bootstrap
           python3 tools/ci_smoke_setup.py session
@@ -246,7 +255,7 @@ jobs:
           if-no-files-found: warn
 
   security:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -274,7 +283,7 @@ jobs:
           if-no-files-found: error
 
   architecture:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -335,7 +344,7 @@ jobs:
 
   coverage:
     needs: [unit, database]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -370,7 +379,7 @@ jobs:
   foundation:
     if: always()
     needs: [quality, unit, database, frontend, images, browser, security, architecture, coverage]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6

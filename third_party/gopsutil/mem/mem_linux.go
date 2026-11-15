@@ -429,17 +429,17 @@ func calculateAvailVmem(ctx context.Context, ret *VirtualMemoryStat, retEx *ExVi
 
 	watermarkLow *= pagesize
 
-	availMemory := ret.Free - watermarkLow
+	availMemory := ret.Free
 	pageCache := retEx.ActiveFile + retEx.InactiveFile
 	pageCache -= uint64(math.Min(float64(pageCache/2), float64(watermarkLow)))
 	availMemory += pageCache
 	availMemory += ret.Sreclaimable - uint64(math.Min(float64(ret.Sreclaimable/2.0), float64(watermarkLow)))
 
-	if availMemory < 0 {
-		availMemory = 0
+	if availMemory < watermarkLow {
+		return 0
 	}
 
-	return availMemory
+	return availMemory - watermarkLow
 }
 
 const swapsFilename = "swaps"

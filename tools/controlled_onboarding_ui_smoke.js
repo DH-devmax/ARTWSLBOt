@@ -275,11 +275,11 @@
       }
     }
     const returnToEditor = async () => {
+      const before = writes.length
       await confirmation().getByRole('button', { name: '返回修改' }).click()
-      // Keep Vue's transition deadline in step with the fixture's installed clock.
-      await advance(350)
       await confirmation().waitFor({ state: 'hidden' })
       await editor().waitFor({ state: 'visible' })
+      check(writes.length === before, 'Returning to scope editor submitted a mutation')
     }
     const solve = async () => {
       await captchaDialog().getByRole('button', { name: '验证', exact: true }).and(page.locator(':enabled')).waitFor()
@@ -312,9 +312,22 @@
       hold = pending; release = pending.release
       return pending
     }
-    const advance = async milliseconds => { now += milliseconds; await page.clock.fastForward(milliseconds) }
+    const advance = async (milliseconds, notify = true) => {
+      now += milliseconds
+      await page.clock.setFixedTime(new Date(now))
+      if (notify) await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+    }
+    const expire = async deadline => {
+      const remaining = Date.parse(deadline) - now
+      check(remaining > 1000, 'Expiry fixture did not start before its deadline')
+      // Re-arm the product's existing resume handler just before the deadline,
+      // then let its auto-ticking timer observe expiry without another focus/read event.
+      await advance(remaining - 1000)
+      await advance(1001, false)
+    }
     page.setDefaultTimeout(10000)
-    await page.clock.install({ time: new Date(now) })
+    // Advance Date explicitly; Playwright's wrapped timers and Vue RAFs auto-tick.
+    await page.clock.setFixedTime(new Date(now))
     await page.route('**/api/v1/**', fixture)
     try {
       for (const platform of platforms) {
@@ -490,7 +503,7 @@
         check(await nativeGroup.inputValue() === created.group.native_id && await nativeGroup.isDisabled(),
           'Controlled progress did not populate and lock its native group without initialGroup')
         await fit(modal(), 'controlled-progress', platform)
-        await advance(600001)
+        await expire(latest.expires_at)
         await modal().locator('.onboarding-expired').waitFor()
         check(!await modal().locator('.onboarding-controlled-expired').count(),
           'Ten-minute challenge expiry incorrectly expired six-hour scope')
@@ -566,7 +579,7 @@
         await advance(5 * 60 * 60 * 1000)
         check(!await modal().locator('.onboarding-controlled-expired').count(),
           'Six-hour scope expired early after the old thirty-minute boundary')
-        await advance(Date.parse(created.expires_at) - now + 1)
+        await expire(created.expires_at)
         await modal().locator('.onboarding-controlled-expired.el-alert--error[role="alert"]').waitFor()
         check(await modal().locator('.onboarding-controlled-expired .el-alert__icon').count() &&
           !await modal().getByRole('button', { name: '重新开始核验' }).count() &&
@@ -650,7 +663,7 @@
         check(friendMutations().length === ordinaryFriendBefore + 1 &&
           friendMutations().at(-1).has_human_verification && captchaCalls().length === ordinaryCaptcha + 4,
         'Ordinary contact approval omitted its challenge-scoped ticket')
-        await advance(60001)
+        await expire(latest.expires_at)
         await modal().locator('.onboarding-expired.el-alert--error[role="alert"]').waitFor()
         check(await modal().getByRole('button', { name: '重新开始核验' }).count(),
           'Ordinary challenge expiry lost restart')
@@ -706,11 +719,15 @@
             `${platform}/${count}/${width}: final candidate was not reachable by list scrolling`)
             await picker.fill(target.name)
             await advance(350)
+            await page.waitForFunction(listID => [...document.getElementById(listID)
+              .querySelectorAll('[role="option"]')].filter(option => option.checkVisibility()).length === 2, listID)
             check(await list.getByRole('option').count() === 2,
               `${platform}/${count}/${width}: same-name filtering lost one candidate`)
             await list.getByRole('option', { name: `${other.name} · ${other.native_id}`, exact: true }).waitFor()
             await picker.fill(target.native_id)
             await advance(350)
+            await page.waitForFunction(listID => [...document.getElementById(listID)
+              .querySelectorAll('[role="option"]')].filter(option => option.checkVisibility()).length === 1, listID)
             check(await list.getByRole('option').count() === 1,
               `${platform}/${count}/${width}: native-ID filtering was not exact`)
             await list.getByRole('option', { name: `${target.name} · ${target.native_id}`, exact: true }).click()
@@ -755,7 +772,7 @@
         captchaCalls().at(-1).body.purpose === 'group_binding_create' &&
         writes.filter(item => item.path === '/group-binding/challenges').length === duringCaptcha,
       'Missing exemption field failed to preserve the backward-compatible captcha')
-      await advance(30001)
+      await expire(legacyScope.expires_at)
       await modal().locator('.onboarding-controlled-expired').waitFor()
       await captchaDialog().waitFor({ state: 'hidden' })
       check(writes.filter(item => item.path === '/group-binding/challenges').length === duringCaptcha &&

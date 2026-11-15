@@ -439,7 +439,7 @@
                 link
                 type="primary"
                 :icon="Refresh"
-                @click="openOnboarding(row)"
+                @click="reverify(row)"
                 >重新核验</ElButton
               >
               <ElButton
@@ -542,7 +542,7 @@
                 link
                 type="primary"
                 :icon="Refresh"
-                @click="openOnboarding(group)"
+                @click="reverify(group)"
                 >重新核验</ElButton
               >
               <ElButton
@@ -1019,9 +1019,14 @@
   function openDemoClaim(group: Row) {
     if (canTestClaim(group)) demoClaimGroup.value = { ...group }
   }
-  function openOnboarding(group?: Row) {
-    if (!canStartOnboarding.value || (group && !canReverify(group))) return
-    onboardingGroup.value = group ? { ...group } : undefined
+  function openOnboarding() {
+    if (!canStartOnboarding.value) return
+    onboardingGroup.value = undefined
+    onboardingOpen.value = true
+  }
+  function reverify(group: Row) {
+    if (!canReverify(group)) return
+    onboardingGroup.value = { ...group }
     onboardingOpen.value = true
   }
   const filterKey = computed(
