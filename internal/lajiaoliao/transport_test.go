@@ -229,6 +229,127 @@ func TestTextFenceFailureTracksTheActualSocketWrite(t *testing.T) {
 	}
 }
 
+func TestRPCReplySurvivesImmediatePeerDisconnect(t *testing.T) {
+	for _, mode := range []string{"success", "rejected", "wrong-request", "invalid-receipt", "missing",
+		"read-success", "read-missing", "failed-fence"} {
+		t.Run(mode, func(t *testing.T) {
+			var writes atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				_, raw, err := conn.ReadMessage()
+				if err != nil {
+					return
+				}
+				writes.Add(1)
+				var request wireRequest
+				if err := gob.NewDecoder(bytes.NewReader(raw)).Decode(&request); err != nil {
+					t.Error(err)
+					return
+				}
+				if mode == "missing" || mode == "read-missing" {
+					return
+				}
+				receipt := protowire.AppendTag(nil, 1, protowire.BytesType)
+				receipt = protowire.AppendString(receipt, "server-string")
+				receipt = protowire.AppendTag(receipt, 2, protowire.BytesType)
+				receipt = protowire.AppendString(receipt, "client-string")
+				receipt = protowire.AppendTag(receipt, 3, protowire.VarintType)
+				receipt = protowire.AppendVarint(receipt, 1700000000123)
+				response := wireResponse{ReqIdentifier: request.ReqIdentifier, MsgIncr: request.MsgIncr, Data: receipt}
+				switch mode {
+				case "rejected":
+					response.ErrCode = 1501
+				case "wrong-request":
+					response.ReqIdentifier++
+				case "invalid-receipt":
+					response.Data = []byte{0xff}
+				}
+				var encoded bytes.Buffer
+				if err := gob.NewEncoder(&encoded).Encode(response); err != nil {
+					t.Error(err)
+					return
+				}
+				if err := conn.WriteMessage(websocket.BinaryMessage, encoded.Bytes()); err != nil {
+					t.Error(err)
+				}
+			}))
+			defer server.Close()
+			conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := newTransport(conn, Session{UserID: "self-string"})
+			defer client.Close()
+			client.verified.Store(true)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			fences := 0
+			fenceErr := errors.New("synthetic final fence failed")
+			fence := func(work context.Context, send func(context.Context) error) error {
+				fences++
+				if err := send(work); err != nil {
+					return err
+				}
+				// Wait until both the reply (if any) and disconnect are observable.
+				select {
+				case <-client.readerDone:
+					if mode == "failed-fence" {
+						return fenceErr
+					}
+					return nil
+				case <-work.Done():
+					return work.Err()
+				}
+			}
+			var receipt Receipt
+			if strings.HasPrefix(mode, "read-") {
+				err = client.rpc(ctx, 1001, &sdkws.GetMaxSeqReq{}, func(raw []byte) error {
+					var decodeErr error
+					receipt, decodeErr = decodeReceipt(raw)
+					return decodeErr
+				}, fence)
+			} else {
+				receipt, err = client.SendText(ctx, "group-string", "client-string", "synthetic text", fence)
+			}
+			if fences != 1 || writes.Load() != 1 {
+				t.Fatal("disconnect caused another submission", fences, writes.Load())
+			}
+			if mode == "success" || mode == "read-success" {
+				if err != nil || receipt.ClientID != "client-string" || receipt.ServerID != "server-string" {
+					t.Fatal("accepted reply was lost on disconnect", receipt, err)
+				}
+			} else {
+				want := "lajiaoliao_protocol_boundary"
+				if mode == "rejected" {
+					want = "lajiaoliao_token_expired"
+				} else if mode == "missing" || mode == "failed-fence" {
+					want = "lajiaoliao_result_unknown"
+				} else if mode == "read-missing" {
+					want = "lajiaoliao_disconnected"
+				}
+				var failure *Failure
+				if !errors.As(err, &failure) || failure.Code != want ||
+					failure.Submitted != (mode != "read-missing") {
+					t.Fatal("disconnect changed the original submission evidence", err, want)
+				}
+				if mode == "failed-fence" && (!errors.Is(err, fenceErr) || receipt != (Receipt{})) {
+					t.Fatal("accepted reply bypassed the failed final fence", receipt, err)
+				}
+			}
+			client.mu.Lock()
+			pending := len(client.pending)
+			client.mu.Unlock()
+			if pending != 0 {
+				t.Fatal("completed RPC leaked its pending slot", pending)
+			}
+		})
+	}
+}
+
 func TestReceiptPinnedWireFields(t *testing.T) {
 	raw := protowire.AppendTag(nil, 1, protowire.BytesType)
 	raw = protowire.AppendString(raw, "server")

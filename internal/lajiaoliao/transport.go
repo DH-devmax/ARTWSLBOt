@@ -252,38 +252,44 @@ func (t *Transport) rpcData(ctx context.Context, code int, data []byte, output f
 	}
 	timer := time.NewTimer(12 * time.Second)
 	defer timer.Stop()
+	var result wireResponse
 	select {
-	case result := <-slot:
-		if result.ReqIdentifier != code {
-			return &Failure{Code: "lajiaoliao_protocol_boundary", Submitted: code == 1003}
-		}
-		if result.ErrCode != 0 {
-			reason := "lajiaoliao_request_rejected"
-			if result.ErrCode == 1501 {
-				reason = "lajiaoliao_token_expired"
-			}
-			if result.ErrCode >= 1502 && result.ErrCode <= 1507 {
-				reason = "lajiaoliao_reauth_required"
-			}
-			if result.ErrCode == 1506 {
-				reason = "lajiaoliao_kicked"
-			}
-			return &Failure{Code: reason, Submitted: code == 1003}
-		}
-		if output(result.Data) != nil {
-			return &Failure{Code: "lajiaoliao_protocol_boundary", Submitted: code == 1003}
-		}
-		return nil
+	case result = <-slot:
 	case <-ctx.Done():
 		return &Failure{Code: "lajiaoliao_result_unknown", Submitted: code == 1003}
 	case <-timer.C:
 		return &Failure{Code: "lajiaoliao_result_unknown", Submitted: code == 1003}
 	case <-t.done:
-		if code != 1003 {
-			return t.Err()
+		// The reader may have accepted a reply immediately before the peer closed.
+		select {
+		case result = <-slot:
+		default:
+			if code != 1003 {
+				return t.Err()
+			}
+			return &Failure{Code: "lajiaoliao_result_unknown", Submitted: true}
 		}
-		return &Failure{Code: "lajiaoliao_result_unknown", Submitted: code == 1003}
 	}
+	if result.ReqIdentifier != code {
+		return &Failure{Code: "lajiaoliao_protocol_boundary", Submitted: code == 1003}
+	}
+	if result.ErrCode != 0 {
+		reason := "lajiaoliao_request_rejected"
+		if result.ErrCode == 1501 {
+			reason = "lajiaoliao_token_expired"
+		}
+		if result.ErrCode >= 1502 && result.ErrCode <= 1507 {
+			reason = "lajiaoliao_reauth_required"
+		}
+		if result.ErrCode == 1506 {
+			reason = "lajiaoliao_kicked"
+		}
+		return &Failure{Code: reason, Submitted: code == 1003}
+	}
+	if output(result.Data) != nil {
+		return &Failure{Code: "lajiaoliao_protocol_boundary", Submitted: code == 1003}
+	}
+	return nil
 }
 
 func (t *Transport) Sequences(ctx context.Context) (*sdkws.GetMaxSeqResp, error) {
