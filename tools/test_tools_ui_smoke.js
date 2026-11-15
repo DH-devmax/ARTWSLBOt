@@ -10,6 +10,17 @@ async (page) => {
   const grant = { id: id(4), group_id: group.group_id, account_ids: [account.id], target_ids: ['8'],
     actions: ['mute_member', 'unmute_member', 'mute_group', 'unmute_group', 'kick_member', 'publish_notice'],
     used: 0, budget: 3, cancelled: false, expires_at: new Date(Date.now() + 300000).toISOString() }
+  let navigationSerial = 0
+  const openTools = async platform => {
+    await page.evaluate(({ owner, platform, account }) => {
+      sessionStorage.clear()
+      sessionStorage.setItem(`wsl:console:${owner}`, 'admin')
+      sessionStorage.setItem(`wsl:workspace:${owner}`, platform)
+      sessionStorage.setItem(`wsl:account:${owner}:${platform}`, account)
+    }, { owner, platform, account: account.id })
+    await page.goto(`${base}/?test-tools-fixture=${++navigationSerial}#tests`)
+    await page.locator('.test-tools').waitFor()
+  }
   let writes = 0, reads = 0, reconcile = 0, key = '', op = null, mode = 'unknown',
     holdReceiver = false, releaseReceiver, receiverArrived, effectFailure = false, historyFailure = false
   const history = []
@@ -91,12 +102,7 @@ async (page) => {
   await page.route('**/api/v1/**', handler)
   try {
     await page.goto(base)
-    await page.evaluate(({ owner, account }) => {
-      sessionStorage.clear()
-      sessionStorage.setItem(`wsl:account:${owner}:wsl`, account)
-    }, { owner, account: account.id })
-    await page.goto(base + '/#tests')
-    await page.reload()
+    await openTools('wsl')
     await page.locator('.tools-grant').click()
     await page.getByText('消息接收：已连接', { exact: true }).waitFor()
     if (!await page.getByText('动作准入', { exact: true }).isVisible() ||
@@ -283,13 +289,7 @@ async (page) => {
       }
       await page.route('**/api/v1/**', textHandler)
       try {
-        await page.evaluate(({ owner, platform, account }) => {
-          sessionStorage.clear()
-          sessionStorage.setItem(`wsl:workspace:${owner}`, platform)
-          sessionStorage.setItem(`wsl:account:${owner}:${platform}`, account)
-        }, { owner, platform, account: sender.id })
-        await page.goto(base + '/#tests')
-        await page.reload()
+        await openTools(platform)
         await page.locator('.tools-grant').click()
         let send, input
         if (platform === 'lajiaoliao') {
