@@ -8,7 +8,7 @@ require (
 	github.com/cloudwego/eino v0.9.22
 	github.com/eino-contrib/jsonschema v1.0.3
 	github.com/gorilla/websocket v1.5.3
-	github.com/jackc/pgx/v5 v5.9.2
+	github.com/jackc/pgx/v5 v5.13.0
 	github.com/klauspost/compress v1.20.3
 	github.com/openimsdk/protocol v0.0.73-alpha.17
 	github.com/pierrec/lz4/v4 v4.1.22
@@ -39,7 +39,7 @@ require (
 	github.com/goph/emperror v0.17.2 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/jackc/puddle/v2 v2.2.3 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.9 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
