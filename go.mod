@@ -5,7 +5,7 @@ go 1.27.4
 replace github.com/shirou/gopsutil/v4 => ./third_party/gopsutil
 
 require (
-	github.com/cloudwego/eino v0.9.22
+	github.com/cloudwego/eino v0.9.23
 	github.com/eino-contrib/jsonschema v1.0.3
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.9.2
