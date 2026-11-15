@@ -1,8 +1,20 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { assetPath, browserContracts, cancelledReport, childEvidence, createRunCancellation, failureDetails, isolatePage, progressReport, validateCases } from './browser-contract.mjs'
+import { assetPath, browserCaseSeconds, browserContracts, cancelledReport, childEvidence, createRunCancellation, failureDetails, isolatePage, progressReport, validateCases } from './browser-contract.mjs'
 
 const sha = 'a'.repeat(40)
+test('long multi-scenario fixtures have exact bounded budgets without changing other cases', () => {
+  for (const name of ['customer_onboarding', 'friend_delete', 'onboarding_incoming']) {
+    assert.equal(browserCaseSeconds(`tools/${name}_ui_smoke.js`), 180)
+  }
+  for (const name of ['assistant_ownership', 'web_captcha']) {
+    assert.equal(browserCaseSeconds(`tools/${name}_ui_smoke.js`), 120)
+  }
+  for (const name of ['tools/commercial_ui_smoke.js', 'tools/customer_onboarding_ui_smoke.js/other',
+    'other/friend_delete_ui_smoke.js', 'toString', '__proto__']) {
+    assert.equal(browserCaseSeconds(name), 90)
+  }
+})
 test('registration requires an explicit fixed browser contract', () => {
   assert.throws(() => browserContracts(undefined))
   assert.throws(() => browserContracts({ native_auth_registration: 'auto' }))

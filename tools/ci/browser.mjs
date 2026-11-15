@@ -5,7 +5,7 @@ import vm from 'node:vm'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { execFileSync, spawn } from 'node:child_process'
-import { assetPath, browserContracts, cancelledReport, childEvidence, createRunCancellation, failureDetails, isolatePage, progressReport, validateCases } from './browser-contract.mjs'
+import { assetPath, browserCaseSeconds, browserContracts, cancelledReport, childEvidence, createRunCancellation, failureDetails, isolatePage, progressReport, validateCases } from './browser-contract.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 process.chdir(root)
@@ -172,7 +172,7 @@ async function pageCheck(name) {
       if (errors.length) throw errors[0]
       if (!value || value.passed === false) throw Error('Synthetic check failed')
     })()
-    const seconds = name === 'tools/onboarding_incoming_ui_smoke.js' ? 180 : 90
+    const seconds = browserCaseSeconds(name)
     await Promise.race([task, new Promise((resolve, reject) => {
       timer = setTimeout(() => reject(Error(`Synthetic case exceeded ${seconds} seconds`)), seconds * 1000)
     }), cancellation.whenCancelled.then(() => { throw Error('Synthetic run cancelled') })])

@@ -1,5 +1,17 @@
 import path from 'node:path'
 
+const pageTimeouts = Object.freeze({
+  'tools/assistant_ownership_ui_smoke.js': 120,
+  'tools/customer_onboarding_ui_smoke.js': 180,
+  'tools/friend_delete_ui_smoke.js': 180,
+  'tools/onboarding_incoming_ui_smoke.js': 180,
+  'tools/web_captcha_ui_smoke.js': 120
+})
+
+export function browserCaseSeconds(name) {
+  return Object.hasOwn(pageTimeouts, name) ? pageTimeouts[name] : 90
+}
+
 export function browserContracts(value) {
   if (!value || Object.keys(value).join() !== 'native_auth_registration' ||
       !['manual_only', 'retired'].includes(value.native_auth_registration)) {
