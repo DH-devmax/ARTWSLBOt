@@ -26,8 +26,14 @@ type ReceivedFrame struct {
 	At    time.Time
 }
 
+// IMLoginError retains only the numeric result, never the upstream body.
+type IMLoginError struct{ Code uint16 }
+
+func (e *IMLoginError) Error() string { return "im_auth_rejected" }
+
 type IMTransport struct {
 	socket      *websocket.Conn
+	writeMu     sync.Mutex
 	mu          sync.Mutex
 	serial      nativewire.SerialAllocator
 	pending     map[[3]uint16]chan nativewire.Frame
@@ -49,6 +55,9 @@ func discoverIM(ctx context.Context, client *http.Client, key, account string) (
 		return nil, errors.New("im_discovery_failed")
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusTooManyRequests {
+		return nil, &RateLimited{After: RetryAfter(response.Header.Get("Retry-After"), time.Now())}
+	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, 65537))
 	if err != nil || response.StatusCode != 200 || len(body) > 65536 {
 		return nil, errors.New("im_discovery_failed")
@@ -90,6 +99,9 @@ func discoverIM(ctx context.Context, client *http.Client, key, account string) (
 }
 
 func connectIM(ctx context.Context, d nativeauth.Deployment, s nativeauth.Session, appKey string) (*IMTransport, error) {
+	if d.ProtocolVersion != nativeauth.DesktopProtocolVersion || s.ProtocolVersion != nativeauth.DesktopProtocolVersion {
+		return nil, errors.New("receiver_configuration_invalid")
+	}
 	client := nativeauth.TransportHTTP()
 	defer client.CloseIdleConnections()
 	endpoints, err := discoverIM(ctx, client, appKey, s.NIMID)
@@ -102,20 +114,7 @@ func connectIM(ctx context.Context, d nativeauth.Deployment, s nativeauth.Sessio
 	}
 	identity[6], identity[8] = identity[6]&15|64, identity[8]&63|128
 	id := fmt.Sprintf("%x-%x-%x-%x-%x", identity[:4], identity[4:6], identity[6:8], identity[8:10], identity[10:])
-	fields := []nativewire.Property{
-		{Key: 3, Value: []byte("16")}, {Key: 4, Value: []byte("Linux")},
-		{Key: 6, Value: []byte("92114")}, {Key: 8, Value: []byte("1")}, {Key: 9, Value: []byte("1")},
-		{Key: 13, Value: []byte(d.DeviceID)}, {Key: 18, Value: []byte(appKey)},
-		{Key: 19, Value: []byte(s.NIMID)}, {Key: 24, Value: []byte("ARTWSLBot")},
-		{Key: 26, Value: []byte(id)}, {Key: 38, Value: []byte{}},
-		{Key: 40, Value: []byte("9.21.14")}, {Key: 41, Value: []byte("0")},
-		{Key: 42, Value: []byte("Native/9.21.14")}, {Key: 112, Value: []byte("0")},
-		{Key: 1000, Value: []byte(s.NIMToken)},
-	}
-	if s.NIMAuthType != 0 {
-		fields = append(fields, nativewire.Property{Key: 115, Value: []byte{byte('0' + s.NIMAuthType)}})
-	}
-	body, err := nativewire.Properties(fields)
+	body, err := imLoginBody(d, s, appKey, id)
 	if err != nil {
 		return nil, err
 	}
@@ -132,8 +131,39 @@ func connectIM(ctx context.Context, d nativeauth.Deployment, s nativeauth.Sessio
 		if err.Error() == "im_auth_rejected" || err.Error() == "im_kicked" {
 			return nil, err
 		}
+		var limited *RateLimited
+		if errors.As(err, &limited) {
+			return nil, err
+		}
 	}
 	return nil, errors.New("im_connection_failed")
+}
+
+func imLoginBody(d nativeauth.Deployment, s nativeauth.Session, appKey, connection string) ([]byte, error) {
+	if d.ProtocolVersion != nativeauth.DesktopProtocolVersion || s.ProtocolVersion != nativeauth.DesktopProtocolVersion ||
+		s.NIMAuthType < 0 || s.NIMAuthType > 2 {
+		return nil, errors.New("receiver_configuration_invalid")
+	}
+	fields := []nativewire.Property{
+		{Key: 3, Value: []byte("16")}, {Key: 4, Value: []byte("Linux")},
+		{Key: 6, Value: []byte("92114")}, {Key: 8, Value: []byte("1")}, {Key: 9, Value: []byte("1")},
+		{Key: 13, Value: []byte(d.DeviceID)}, {Key: 18, Value: []byte(appKey)},
+		{Key: 19, Value: []byte(s.NIMID)}, {Key: 24, Value: []byte("ARTWSLBot")},
+		{Key: 26, Value: []byte(connection)}, {Key: 38, Value: []byte{}},
+		{Key: 40, Value: []byte("9.21.14")}, {Key: 41, Value: []byte("0")},
+		{Key: 42, Value: []byte("Native/9.21.14")}, {Key: 112, Value: []byte("0")},
+		{Key: 1000, Value: []byte(s.NIMToken)},
+	}
+	if s.NIMAuthType != 0 {
+		fields = append(fields, nativewire.Property{Key: 115, Value: []byte{byte('0' + s.NIMAuthType)}})
+	}
+	if s.NIMAuthType == 2 {
+		// Desktop 2.8.3 Hb(kind, token) uses the current token as loginExt.
+		// The removed Android client's timestamp is not a desktop contract.
+		fields = append(fields, nativewire.Property{Key: 116,
+			Value: []byte(s.NIMToken)})
+	}
+	return nativewire.Properties(fields)
 }
 
 func openIM(ctx context.Context, dialer *websocket.Dialer, endpoint string, login []byte) (*IMTransport, error) {
@@ -142,6 +172,9 @@ func openIM(ctx context.Context, dialer *websocket.Dialer, endpoint string, logi
 		response.Body.Close()
 	}
 	if err != nil {
+		if response != nil && response.StatusCode == http.StatusTooManyRequests {
+			return nil, &RateLimited{After: RetryAfter(response.Header.Get("Retry-After"), time.Now())}
+		}
 		return nil, errors.New("im_connection_failed")
 	}
 	t := &IMTransport{socket: conn, pending: make(map[[3]uint16]chan nativewire.Frame),
@@ -157,13 +190,10 @@ func openIM(ctx context.Context, dialer *websocket.Dialer, endpoint string, logi
 	}()
 	reply, err := t.request(ctx, 2, 3, login)
 	if err == nil && reply.Code != 200 {
-		err = errors.New("im_auth_rejected")
+		err = &IMLoginError{Code: reply.Code}
 	}
 	if err == nil {
 		err = nativewire.ValidateIMLogin(reply.Body)
-	}
-	if err == nil {
-		_, err = t.heartbeat(ctx)
 	}
 	if err != nil {
 		t.close(err)
@@ -237,35 +267,59 @@ func (t *IMTransport) read() {
 }
 
 func (t *IMTransport) write(ctx context.Context, service, command byte, body []byte, reply chan nativewire.Frame) ([3]uint16, error) {
+	key, _, err := t.writeTracked(ctx, service, command, body, reply)
+	return key, err
+}
+
+// Only socket writes share writeMu. Pending reply lookup must never wait for a
+// control transaction or a slow write; in particular it serves heartbeat/ACK.
+func (t *IMTransport) writeTracked(ctx context.Context, service, command byte, body []byte, reply chan nativewire.Frame) ([3]uint16, bool, error) {
+	t.writeMu.Lock()
+	defer t.writeMu.Unlock()
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	key := [3]uint16{uint16(service), uint16(command), 0}
 	select {
 	case <-t.done:
-		return key, t.err
+		err := t.err
+		t.mu.Unlock()
+		return key, false, err
 	default:
 	}
 	if err := ctx.Err(); err != nil {
-		return key, err
+		t.mu.Unlock()
+		return key, false, err
 	}
 	serial, err := t.serial.Next()
 	if err != nil {
-		return key, err
+		t.mu.Unlock()
+		return key, false, err
 	}
 	key[2] = serial
 	if reply != nil {
 		t.pending[key] = reply
 	}
+	t.mu.Unlock()
 	packet, err := nativewire.Packet(service, command, serial, body)
+	defer clear(packet)
+	attempted := false
 	if err == nil {
-		_ = t.socket.SetWriteDeadline(time.Now().Add(5 * time.Second))
-		err = t.socket.WriteMessage(websocket.BinaryMessage, packet)
+		deadline := time.Now().Add(5 * time.Second)
+		if end, ok := ctx.Deadline(); ok && end.Before(deadline) {
+			deadline = end
+		}
+		err = t.socket.SetWriteDeadline(deadline)
+		if err == nil {
+			attempted = true
+			err = t.socket.WriteMessage(websocket.BinaryMessage, packet)
+		}
 	}
 	if err != nil {
+		t.mu.Lock()
 		delete(t.pending, key)
-		return key, errors.New("im_write_failed")
+		t.mu.Unlock()
+		return key, attempted, errors.New("im_write_failed")
 	}
-	return key, nil
+	return key, attempted, nil
 }
 
 func (t *IMTransport) request(ctx context.Context, service, command byte, body []byte) (nativewire.Frame, error) {
@@ -281,6 +335,12 @@ func (t *IMTransport) request(ctx context.Context, service, command byte, body [
 	case f := <-wait:
 		return f, nil
 	case <-t.done:
+		// The reader may queue a reply and then observe the peer closing.
+		select {
+		case f := <-wait:
+			return f, nil
+		default:
+		}
 		t.mu.Lock()
 		defer t.mu.Unlock()
 		return nativewire.Frame{}, t.err

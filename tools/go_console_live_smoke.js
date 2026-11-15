@@ -10,8 +10,15 @@ async (page) => {
     return result.data
   }
   const catalog = await request('/workspaces')
-  if (catalog.items.length !== 2 || catalog.items.some((item) => item.limits.accounts !== 10 || item.limits.groups !== 100)) throw new Error('Workspace limits are inconsistent')
+  if (catalog.items.length !== 4 || catalog.items.filter(item => item.id !== 'user').some((item) =>
+    item.limits.accounts !== 10 || item.limits.groups !== 300 || item.limits.native_connections !== 20)) throw new Error('Workspace limits are inconsistent')
   const wsl = await request('/accounts'), chat = await request('/accounts', 'maibot')
+  const nativeProfile = await request('/native-deployment')
+  if (nativeProfile.login_adapter !== 'desktop' || nativeProfile.supported_protocol !== '2.8.3' ||
+      (nativeProfile.configured && nativeProfile.protocol_version !== '2.8.3') ||
+      (nativeProfile.migration_required && nativeProfile.configured)) {
+    throw new Error('Live native deployment exposed a non-desktop authentication adapter')
+  }
   for (const account of [...wsl, ...chat]) {
     const dashboard = await request(`/accounts/${account.id}/dashboard`, account.workspace)
     if (dashboard.account.id !== account.id || dashboard.account.workspace !== account.workspace ||
@@ -22,7 +29,7 @@ async (page) => {
     }
   }
   const sample = await request('/system/monitor')
-  if (!sample.available || sample.stale || !sample.sampled_at) throw new Error('Simon projection is not live')
+  if (!sample.services?.api?.available || !sample.services?.heatbot?.available) throw new Error('Project resource sampling is not live')
   const serialized = JSON.stringify(sample)
   if (serialized.includes('processes') || serialized.includes('host_name') || serialized.includes('env')) throw new Error('Monitor exposed forbidden fields')
   const capabilities = await request('/maibot/capabilities', 'maibot')
@@ -36,7 +43,9 @@ async (page) => {
     passed: true, runtime: 'docker', accountPanels: { wsl: wsl.length, maibot: chat.length },
     authenticated: [...wsl, ...chat].filter((account) => account.auth_state === 'authenticated').length,
     connected: [...wsl, ...chat].filter((account) => account.runtime_state === 'connected').length,
-    simonLive: true, monitorScope: sample.scope, capabilityCount: capabilities.items.length,
-    dashboards: wsl.length + chat.length, writes: 0, native_ready: false, ai_ready: false
+    projectMetricsLive: true, monitorScope: sample.monitor_scope, capabilityCount: capabilities.items.length,
+    dashboards: wsl.length + chat.length, writes: 0, native_ready: false, ai_ready: false,
+    nativeAdapter: nativeProfile.login_adapter, nativeConfigured: nativeProfile.configured,
+    desktopMigrationRequired: nativeProfile.migration_required === true
   }
 }

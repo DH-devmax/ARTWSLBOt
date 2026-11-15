@@ -4,86 +4,27 @@ import (
 	"context"
 	"net/http"
 	"slices"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"wangshangliao/internal/control"
 )
 
-type PermissionSpec struct {
-	Code   string `json:"code"`
-	Label  string `json:"label"`
-	Module string `json:"module,omitempty"`
-}
+type PermissionSpec = control.PermissionSpec
 
-var tenantPermissions = []PermissionSpec{
-	{"overview:read", "查看工作台", ""},
-	{"accounts:read", "查看管理机器人状态", ""},
-	{"groups:read", "查看已授权群", ""},
-	{"groups:configure", "配置群管与自动化", "management"},
-	{"groups:moderation", "编辑拦截词与名单", "moderation"},
-	{"groups:replies", "编辑关键词回复", "replies"},
-	{"groups:revoke", "撤销本租户群授权", ""},
-	{"groups:ai", "申请 AI 入群与启停", "ai"},
-	{"claims:read", "查看群授权申请", ""},
-	{"claims:create", "申请认领群组", ""},
-	{"operations:read", "查看操作记录", ""},
-	{"operations:create", "提交群管操作", "moderation"},
-	{"operations:cancel", "取消排队操作", ""},
-	{"ledger:read", "查看历史台账", ""},
-	{"ledger:create", "新增财务记录", "finance"},
-	{"activities:read", "查看活动", ""},
-	{"activities:create", "创建活动", "activities"},
-	{"activities:draw", "活动开奖", "activities"},
-	{"audit:read", "查看本租户审计", ""},
-}
+var tenantPermissions = control.BusinessPermissionCatalog()
 
 func rolePermissions(role string) []string {
-	out := []string{}
-	for _, spec := range tenantPermissions {
-		if role == "manager" || role == "operator" && spec.Code != "groups:revoke" && spec.Module != "finance" ||
-			role == "viewer" && strings.HasSuffix(spec.Code, ":read") {
-			out = append(out, spec.Code)
-		}
-	}
-	return out
+	return control.RolePermissions(role, tenantPermissions)
 }
 
 func (s *Server) permissions(ctx context.Context, p Principal) ([]string, error) {
+	out, err := control.EffectivePermissions(ctx, s.DB.Platform, control.Actor{ID: p.ID, TenantID: p.TenantID, Role: p.Role}, tenantPermissions)
+	if err != nil {
+		return nil, err
+	}
 	if p.Role == "superadmin" {
-		out := rolePermissions("manager")
 		return append(out, "users:manage", "plans:manage", "accounts:manage", "claims:review",
 			"personas:read", "personas:manage", "tests:manage", "access:manage", "workspaces:maibot"), nil
-	}
-	var allowed []string
-	err := s.DB.Platform.QueryRow(ctx, `SELECT permissions FROM user_access WHERE user_id=$1`, p.ID).Scan(&allowed)
-	if err == pgx.ErrNoRows {
-		allowed = rolePermissions("manager")
-	} else if err != nil {
-		return nil, err
-	}
-	modules := []string{}
-	var aiLimit int
-	err = s.DB.Platform.QueryRow(ctx, `SELECT p.modules,p.ai_group_limit FROM subscriptions sub
-        JOIN plans p ON p.id=sub.plan_id WHERE sub.tenant_id=$1 AND sub.enabled AND sub.expires_at>now()`,
-		p.TenantID).Scan(&modules, &aiLimit)
-	if err != nil && err != pgx.ErrNoRows {
-		return nil, err
-	}
-	out := []string{}
-	for _, spec := range tenantPermissions {
-		entitled := spec.Module == "" || slices.Contains(modules, spec.Module)
-		if spec.Module == "management" {
-			entitled = false
-			for _, module := range []string{"moderation", "replies", "schedules", "rankings", "cards", "friends"} {
-				entitled = entitled || slices.Contains(modules, module)
-			}
-		}
-		if spec.Module == "ai" {
-			entitled = entitled && aiLimit > 0
-		}
-		if entitled && slices.Contains(allowed, spec.Code) {
-			out = append(out, spec.Code)
-		}
 	}
 	return out, nil
 }
@@ -95,7 +36,8 @@ func (s *Server) accessCatalog(w http.ResponseWriter, r *http.Request, p Princip
 	} {
 		roles = append(roles, map[string]any{"code": role.code, "label": role.label, "permissions": rolePermissions(role.code)})
 	}
-	send(w, 200, map[string]any{"permissions": tenantPermissions, "roles": roles})
+	send(w, 200, map[string]any{"permissions": tenantPermissions, "roles": roles,
+		"assistant_templates": control.AssistantPermissionTemplates()})
 	return nil
 }
 
@@ -184,6 +126,9 @@ func (s *Server) saveUserAccess(w http.ResponseWriter, r *http.Request, p Princi
 	if err != nil {
 		return err
 	}
+	if _, err = tx.Exec(r.Context(), `UPDATE users SET access_version=access_version+1 WHERE id=$1`, r.PathValue("id")); err != nil {
+		return err
+	}
 	if _, err = tx.Exec(r.Context(), `UPDATE operations SET status='cancelled',result_code='user_permissions_changed',updated_at=now()
         WHERE actor_id=$1 AND status='queued'`, r.PathValue("id")); err != nil {
 		return err
@@ -199,10 +144,14 @@ func (s *Server) saveUserAccess(w http.ResponseWriter, r *http.Request, p Princi
 }
 
 var routePermissions = map[string]string{
-	"GET /api/v1/overview": "overview:read", "GET /api/v1/accounts": "accounts:read",
+	"PUT /api/v1/groups/{id}/chat-preferences": "groups:ai",
+	"GET /api/v1/overview":                     "overview:read", "GET /api/v1/accounts": "accounts:read",
 	"GET /api/v1/accounts/{id}/dashboard": "overview:read",
 	"GET /api/v1/groups":                  "groups:read", "PATCH /api/v1/groups/{id}": "groups:configure",
-	"POST /api/v1/groups/{id}/revoke": "groups:revoke", "PUT /api/v1/groups/{id}/ai-service": "groups:ai",
+	"GET /api/v1/features/catalog": "groups:read", "GET /api/v1/groups/{id}/features": "groups:read",
+	"PUT /api/v1/groups/{id}/features": "groups:read",
+	"POST /api/v1/groups/{id}/features/preview": "groups:read",
+	"POST /api/v1/groups/{id}/revoke":  "groups:revoke", "PUT /api/v1/groups/{id}/ai-service": "groups:ai",
 	"GET /api/v1/claims": "claims:read", "POST /api/v1/claims": "claims:create",
 	"GET /api/v1/operations": "operations:read", "POST /api/v1/operations": "operations:create",
 	"POST /api/v1/operations/{id}/cancel": "operations:cancel",

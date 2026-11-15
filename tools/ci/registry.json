@@ -1,0 +1,149 @@
+{
+  "schema": 1,
+  "python": [
+    "ai/tests/test_bridge.py",
+    "tools/test_ci_smoke_setup.py",
+    "tools/test_compose_dev.py",
+    "tools/test_compose_local.py",
+    "tools/test_container_smoke_auth.py",
+    "tools/test_container_smoke_monitor.py",
+    "tools/test_native_client_config.py",
+    "tools/test_native_mobile_search_config.py",
+    "tools/architecture/test_architecture.py",
+    "tools/architecture/test_baseline.py",
+    "tools/architecture/test_flows.py",
+    "tools/ci/test_common.py",
+    "tools/ci/test_registry.py",
+    "tools/ci/test_run.py",
+    "tools/ci/test_go_tests.py",
+    "tools/ci/test_coverage.py",
+    "tools/ci/test_lint.py",
+    "tools/ci/test_install.py",
+    "tools/ci/test_security.py",
+    "tools/ci/test_secret_policy.py",
+    "tools/ci/test_release.py",
+    "tools/ci/test_images.py",
+    "tools/ci/test_foundation.py"
+  ],
+  "node": [
+    "tools/message_quote_test.mjs",
+    "tools/onboarding_identity_test.mjs",
+    "tools/onboarding_sending_error_test.mjs",
+    "tools/architecture/render-cache.test.mjs",
+    "tools/ci/browser.test.mjs"
+  ],
+  "browser_contracts": {
+    "native_auth_registration": "manual_only"
+  },
+  "browser": [
+    "tools/workspaces_ui_smoke.js",
+    "tools/account_dashboard_ui_smoke.js",
+    "tools/account_removal_ui_smoke.js",
+    "tools/assistant_binding_ui_smoke.js",
+    "tools/assistant_composer_ui_smoke.js",
+    "tools/assistant_conversations_ui_smoke.js",
+    "tools/assistant_dual_platform_ui_smoke.js",
+    "tools/assistant_modules_ui_smoke.js",
+    "tools/assistant_outcomes_ui_smoke.js",
+    "tools/assistant_ownership_ui_smoke.js",
+    "tools/assistant_rendering_ui_smoke.js",
+    "tools/business_modules_ui_smoke.js",
+    "tools/chili_self_invitation_ui_smoke.js",
+    "tools/commercial_ui_smoke.js",
+    "tools/console_ui_smoke.js",
+    "tools/controlled_onboarding_entry_ui_smoke.js",
+    "tools/customer_onboarding_ui_smoke.js",
+    "tools/customer_package_ui_smoke.js",
+    "tools/friend_approve_ui_smoke.js",
+    "tools/friend_delete_ui_smoke.js",
+    "tools/gateway_inspection_ui_smoke.js",
+    "tools/group_reproof_ui_smoke.js",
+    "tools/lajiaoliao_native_ui_smoke.js",
+    "tools/messages_ui_smoke.js",
+    "tools/mobile_search_auth_ui_smoke.js",
+    "tools/multi_platform_ui_smoke.js",
+    "tools/native_acceptance_ui_smoke.js",
+    "tools/native_auth_error_ui_smoke.js",
+    "tools/native_receiver_ui_smoke.js",
+    "tools/native_roles_ui_smoke.js",
+    "tools/native_settings_ui_smoke.js",
+    "tools/onboarding_controlled_ui_smoke.js",
+    "tools/onboarding_friend_gate_ui_smoke.js",
+    "tools/onboarding_incoming_ui_smoke.js",
+    "tools/operator_demo_claim_ui_smoke.js",
+    "tools/operator_demo_ui_smoke.js",
+    "tools/platform_assistant_ui_smoke.js",
+    "tools/runtime_monitor_ui_smoke.js",
+    "tools/test_tools_ui_smoke.js",
+    "tools/theme_ui_smoke.js",
+    "tools/user_center_empty_ui_smoke.js",
+    "tools/web_captcha_ui_smoke.js"
+  ],
+  "browser_component": [
+    "tools/feature_rules_ui_smoke.js",
+    "tools/controlled_friend_submit_diagnostic_ui_smoke.js",
+    "tools/onboarding_applicant_ui_smoke.js",
+    "tools/onboarding_outbound_gate_ui_smoke.js",
+    "tools/test_tools_confirmation_ui_smoke.js",
+    "tools/controlled_onboarding_ui_smoke.js"
+  ],
+  "auxiliary": [
+    {
+      "path": "tools/native_auth_tabs_ui_smoke.js",
+      "reason": "Legacy live-account discovery and removed workbench selectors. native_auth_error replaces login/signup switching under the explicit manual_only contract, consent and input clearing, zero signup/SMS content submissions, late CAPTCHA callbacks and unknown-result guards; mobile_search_auth and multi_platform retain account/platform and authentication pool isolation."
+    },
+    {
+      "path": "tools/native_captcha_layout_smoke.js",
+      "reason": "Retired live-account workbench and external vendor SDK layout fixture. native_auth_error replaces synthetic modal/error bounds at narrow, short, landscape and desktop viewports; mobile_search_auth covers the intercepted verification boundary. Live vendor SDK acceptance is outside synthetic CI."
+    },
+    {
+      "path": "tools/demo_friend_ui_smoke.js",
+      "reason": "Compatibility alias of onboarding_incoming_ui_smoke.js; run the replacement once."
+    },
+    {
+      "path": "tools/assistant_ui_smoke.js",
+      "reason": "Retired drawer selectors; current workspace behavior is covered by assistant_conversations, ownership, composer, rendering and outcomes."
+    },
+    {
+      "path": "tools/go_console_ui_smoke.js",
+      "reason": "Retired in-page settings selectors; current scope dialogs covered by console, settings and business module regressions."
+    },
+    {
+      "path": "tools/native_signup_ui_smoke.js",
+      "reason": "Legacy live-account discovery and full registration execution fixture. Manual registration remains a product capability; native_auth_error replaces the form/consent/switch/CAPTCHA isolation coverage under an explicit manual_only contract without submitting signup or SMS content. This fixture does not establish native signup acceptance."
+    },
+    {
+      "path": "tools/onboarding_outbound_ui_smoke.js",
+      "reason": "Retired customer outbound-search wizard; incoming onboarding replacement is mandatory."
+    }
+  ],
+  "manual": [
+    {
+      "path": "tools/ui_smoke.js",
+      "reason": "Read-only live-console acceptance; container smoke verifies the isolated synthetic stack."
+    },
+    {
+      "path": "tools/go_console_live_smoke.js",
+      "reason": "Live stack check depends on runtime identity; covered by explicit container smoke."
+    },
+    {
+      "path": "tools/docker_dev_smoke.mjs",
+      "reason": "Optional development Compose HMR resource test; not an automatic product mutation."
+    },
+    {
+      "path": "tools/native_usage_ui_smoke.mjs",
+      "reason": "Reads a live authenticated console; never run on a pull request."
+    },
+    {
+      "path": "tools/run_multi_platform_ui_smoke.mjs",
+      "reason": "Legacy explicit local runner; CI uses the audited registry and isolated browser harness."
+    },
+    {
+      "path": "tools/ci_ui_smoke.mjs",
+      "reason": "Synthetic authenticated wsl_test container-only check, explicitly invoked by the container job."
+    }
+  ],
+  "component_arguments": {
+    "tools/controlled_onboarding_ui_smoke.js": ["--source"]
+  }
+}

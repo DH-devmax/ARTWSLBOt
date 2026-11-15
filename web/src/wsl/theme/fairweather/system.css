@@ -1,0 +1,27 @@
+/*
+ * Fairweather product adaptation, Copyright 2026 Uiverse Design.
+ * Original design and attribution: DESIGN.md; license: LICENSE.md.
+ * Local system fonts; no network fonts, icon CDN or marketing components.
+ */
+:root {
+  --fw-canvas: #f5f6f8;
+  --fw-paper: #fff;
+  --fw-mist: #f6f7f9;
+  --fw-mist-deep: #eceef2;
+  --fw-ink: #171b24;
+  --fw-ink-soft: #414957;
+  --fw-slate: #727985;
+  --fw-hairline: #e1e5eb;
+  --fw-hairline-soft: #edf0f4;
+  --fw-blue: #3f6fd1;
+  --fw-blue-deep: #2f58ae;
+  --fw-blue-soft: #edf3ff;
+  --fw-positive: #16834b;
+  --fw-negative: #d14343;
+  --fw-font-body:
+    -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --fw-font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  --fw-focus-ring: 0 0 0 3px rgb(63 111 209 / 14%);
+  --fw-shadow-sm: 0 2px 8px rgb(23 27 36 / 4%);
+  --fw-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}

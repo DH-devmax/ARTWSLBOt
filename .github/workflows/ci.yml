@@ -1,53 +1,398 @@
 name: platform-checks
-on: [push, pull_request, workflow_call]
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 concurrency:
   group: checks-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+defaults:
+  run:
+    shell: bash
+env:
+  CI: "true"
+  CGO_ENABLED: "1"
+  GOFLAGS: -mod=readonly
 jobs:
-  foundation:
+  quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+          persist-credentials: false
+      - uses: ./.github/actions/ci-toolchain
         with:
-          python-version: "3.13"
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: 22
-      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-        with:
-          version: 11.15.1
-      - run: python3 tools/check_repository.py
+          web: "true"
+      - name: Repository and explicit test inventory
         env:
           WSL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-      - name: Validate GitHub workflows
-        run: docker run --rm --network none -v "$PWD:/repo:ro" -w /repo rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 -color
-      - name: Scan committed source for secrets
-        run: docker run --rm --network none --user "$(id -u):$(id -g)" -v "$PWD:/repo:ro" ghcr.io/gitleaks/gitleaks@sha256:b5918eb91b8d2473cec722f066abb4352e4ffdc4ec9f4283ec143aba9ec9ebc4 git /repo --config /repo/.gitleaks.toml --redact=100 --no-banner
-      - run: pnpm --dir web install --frozen-lockfile --ignore-scripts
-      - run: pnpm --dir web exec prettier --check src/wsl
-      - run: pnpm --dir web build
-      - run: docker build -f deploy/test.Dockerfile -t wsl-test:ci .
-      - run: docker run --rm wsl-test:ci
-      - run: docker run --rm wsl-test:ci vet -tags sodium ./...
-      - run: docker run --rm --entrypoint python3 wsl-test:ci tools/check_architecture.py
-      - run: docker run --rm --entrypoint python3 -e PYTHONPATH=ai wsl-test:ci -m unittest discover -s ai/tests -v
-      - run: docker build -f deploy/api.Dockerfile -t wsl-api:local .
-      - run: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace wsl-api:local init
-      - run: docker compose up -d --wait postgres
-      - run: docker compose run --rm migrate
-      - run: docker run --rm --network wsl-platform_default -v "$PWD/.env:/src/.env:ro" -e WSL_INTEGRATION=1 -e WSL_CONTAINER_TEST=1 wsl-test:ci test -race -tags sodium -count=1 ./internal/httpapi
-      - run: docker run --rm --network wsl-platform_default -v "$PWD/.env:/src/.env:ro" -e WSL_GATEWAY_INTEGRATION=1 -e WSL_CONTAINER_TEST=1 wsl-test:ci test -race -tags sodium -count=1 ./internal/gateway
-      - run: docker build -f deploy/web.Dockerfile -t wsl-web:local web
-      - run: python3 tools/container_smoke.py
-      - run: docker compose up -d --wait
-      - run: docker compose --profile ops run --rm bootstrap
-      - run: docker build -f deploy/browser-test.Dockerfile -t wsl-browser-test:ci .
-      - run: docker run --rm --network wsl-platform_default --shm-size=256m -v "$PWD:/workspace:ro" wsl-browser-test:ci
+        run: |
+          python3 tools/check_repository.py
+          python3 tools/ci/registry.py
+      - name: Workflow syntax and committed secret scan
+        run: |
+          docker run --rm --network none -v "$PWD:/repo:ro" -w /repo rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 -color
+          docker run --rm --network none --user "$(id -u):$(id -g)" -v "$PWD:/repo:ro" ghcr.io/gitleaks/gitleaks@sha256:b5918eb91b8d2473cec722f066abb4352e4ffdc4ec9f4283ec143aba9ec9ebc4 git /repo --config /repo/.gitleaks.toml --redact=100 --no-banner
+      - name: Install pinned verification tools
+        run: python3 tools/ci/install.py --tools ruff staticcheck
+      - name: Formatting and static diagnostics
+        run: |
+          python3 tools/ci/lint.py --check format --output output/ci/quality/format
+          python3 tools/ci/lint.py --check staticcheck --output output/ci/quality/staticcheck
+          python3 tools/ci/lint.py --check ruff --output output/ci/quality/ruff
+      - name: Synthetic Python and CI contract regressions
+        run: |
+          python3 -m pip install --require-hashes -r tools/ci/requirements.lock -r tools/architecture/requirements.lock
+          npm ci --prefix tools/architecture --ignore-scripts --no-audit --no-fund
+          python3 tools/ci/run.py --profile python --output output/ci/quality/python
+      - run: python3 tools/ci/evidence.py --job quality --directory output/ci/quality
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: ci-report-quality-${{ github.sha }}
+          path: output/ci/quality/
+          retention-days: 14
+          if-no-files-found: error
+
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-toolchain
+      - name: Discover and execute every Go test with race and sodium
+        run: python3 tools/ci/go_tests.py --profile unit --output output/ci/unit
+      - run: python3 tools/ci/evidence.py --job unit --directory output/ci/unit
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: ci-report-unit-${{ github.sha }}
+          path: output/ci/unit/
+          retention-days: 14
+          if-no-files-found: error
+
+  images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Build each release image once
+        run: |
+          docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" -f deploy/api.Dockerfile -t wsl-api:ci .
+          docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" -f deploy/web.Dockerfile -t wsl-web:ci web
+          python3 tools/ci/images.py pack --component api --directory output/images
+          python3 tools/ci/images.py pack --component web --directory output/images
+          mkdir -p output/ci/images
+          cp output/images/api.json output/images/web.json output/ci/images/
+      - run: python3 tools/ci/evidence.py --job images --directory output/ci/images
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verified-images-${{ github.sha }}
+          path: |
+            output/images/api.tar
+            output/images/web.tar
+            output/images/api.json
+            output/images/web.json
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: ci-report-images-${{ github.sha }}
+          path: output/ci/images/
+          retention-days: 14
+          if-no-files-found: error
+
+  database:
+    needs: images
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      WSL_API_IMAGE: wsl-api:ci
+      WSL_WEB_IMAGE: wsl-web:ci
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-toolchain
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: verified-images-${{ github.sha }}
+          path: output/images
+      - name: Load verified API and prepare isolated wsl_test
+        run: |
+          python3 tools/ci/images.py load --component api --directory output/images
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace wsl-api:ci init
+          python3 tools/ci_smoke_setup.py prepare
+          docker compose up -d --wait postgres
+      - name: Serial control, HTTP and gateway database tests
+        run: python3 tools/ci/go_tests.py --profile database --output output/ci/database
+      - run: python3 tools/ci/evidence.py --job database --directory output/ci/database
+      - name: Remove only the fresh CI database stack
+        if: ${{ always() && hashFiles('.env') != '' }}
+        run: docker compose down --volumes
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: ci-report-database-${{ github.sha }}
+          path: output/ci/database/
+          retention-days: 14
+          if-no-files-found: error
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-toolchain
+        with:
+          web: "true"
+          native: "false"
+      - name: Product lint without generated demo auto-imports
+        run: python3 tools/ci/lint.py --check eslint --output output/ci/frontend/eslint
+      - name: Registered synthetic frontend logic
+        run: python3 tools/ci/run.py --profile node --output output/ci/frontend/node
+      - name: Product type check and clean build
+        run: |
+          pnpm --dir web run build
+          python3 tools/ci/check.py --name product-build --output output/ci/frontend/build.json
+      - run: python3 tools/ci/evidence.py --job frontend --directory output/ci/frontend
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: ci-report-frontend-${{ github.sha }}
+          path: output/ci/frontend/
+          retention-days: 14
+          if-no-files-found: error
+
+  browser:
+    needs: images
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      WSL_API_IMAGE: wsl-api:ci
+      WSL_WEB_IMAGE: wsl-web:ci
+      WSL_SMOKE_API_IMAGE: wsl-api:ci
+      WSL_SMOKE_WEB_IMAGE: wsl-web:ci
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-toolchain
+        with:
+          web: "true"
+          native: "false"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: verified-images-${{ github.sha }}
+          path: output/images
+      - name: Reuse the exact images and their static assets
+        run: |
+          python3 tools/ci/images.py load --component api --directory output/images
+          python3 tools/ci/images.py load --component web --directory output/images
+          instance=$(docker create wsl-web:ci)
+          mkdir -p web/dist
+          docker cp "$instance:/usr/share/nginx/html/." web/dist/
+          docker rm "$instance"
+      - name: Registered browser regressions with synthetic APIs
+        run: |
+          npm ci --prefix tools/ci/browser --ignore-scripts --no-audit --no-fund
+          npm exec --prefix tools/ci/browser -- playwright install --with-deps chromium
+          node tools/ci/browser.mjs
+      - name: Container contracts on a separate fresh wsl_test
+        run: |
+          docker build -f deploy/test.Dockerfile -t wsl-test:ci .
+          python3 tools/container_smoke.py
+          python3 tools/ci/check.py --name container-smoke --output output/ci/browser/container.json
+      - name: Authenticated website smoke on fresh Compose fixtures
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace wsl-api:ci init
+          python3 tools/ci_smoke_setup.py prepare
+          docker compose up -d --wait
+          docker compose --profile ops run --rm bootstrap
+          python3 tools/ci_smoke_setup.py session
+          docker build -f deploy/browser-test.Dockerfile -t wsl-browser-test:ci .
+          docker run --rm --network wsl-platform_default --shm-size=256m -e CI=true -v "$PWD:/workspace:ro" wsl-browser-test:ci
+          python3 tools/ci/check.py --name authenticated-container-ui --output output/ci/browser/authenticated.json
+      - run: python3 tools/ci/evidence.py --job browser --directory output/ci/browser
       - if: ${{ always() && hashFiles('.env') != '' }}
-        run: docker compose down
+        run: docker compose down --volumes
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: ci-report-browser-${{ github.sha }}
+          path: output/ci/browser/
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: synthetic-ui-screenshots-${{ github.sha }}
+          path: output/playwright/*.png
+          retention-days: 14
+          if-no-files-found: warn
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-toolchain
+      - run: python3 tools/ci/install.py --tools govulncheck codeql
+      - name: Reachable dependency vulnerabilities
+        run: python3 tools/ci/security.py govulncheck --output output/ci/security/vulnerabilities
+      - uses: github/codeql-action/init@5895b2c9be147bc7f1c75ce72c5cb577febb1907 # v4
+        with:
+          languages: go,javascript-typescript
+          build-mode: manual
+          tools: ${{ runner.temp }}/codeql-bundle.tar.gz
+          config-file: .github/codeql.yml
+      - name: Extract the real CGO sodium build
+        run: go build -tags sodium ./cmd/... ./internal/... ./tools/...
+      - uses: github/codeql-action/analyze@5895b2c9be147bc7f1c75ce72c5cb577febb1907 # v4
+        with:
+          output: output/ci/security/codeql
+          upload: false
+      - name: Fail on findings, malformed or missing extraction results
+        run: python3 tools/ci/security.py codeql --output output/ci/security/codeql
+      - run: python3 tools/ci/evidence.py --job security --directory output/ci/security
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: ci-report-security-${{ github.sha }}
+          path: output/ci/security/
+          retention-days: 14
+          if-no-files-found: error
+
+  architecture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/ci-toolchain
+        with:
+          native: "false"
+      - name: Install isolated architecture dependencies
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "true"
+        run: |
+          python3 -m pip install --require-hashes -r tools/architecture/requirements-check.lock
+          npm ci --prefix tools/architecture --ignore-scripts --no-audit --no-fund
+      - name: Source facts, ownership and catalog synchronization
+        run: |
+          python3 tools/check_architecture.py
+          go run ./tools/feature_catalog -check
+          python3 tools/architecture/architecture.py update --output output/ci/architecture/candidate
+          python3 tools/architecture/architecture.py check
+      - name: Compare source facts with the exact event baseline
+        if: ${{ !cancelled() && hashFiles('output/ci/architecture/candidate/graph.json') != '' }}
+        env:
+          CI_DIFF_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+          command = ["python3", "tools/architecture/architecture.py", "diff",
+                     "--candidate", "output/ci/architecture/candidate/graph.json",
+                     "--output", "output/ci/architecture/diff"]
+          base = os.environ.get("CI_DIFF_BASE", "")
+          if re.fullmatch(r"[0-9a-f]{40}", base) and set(base) != {"0"}:
+              subprocess.run(["git", "merge-base", "--is-ancestor", base, "HEAD"], check=True)
+              command += ["--base", base]
+          subprocess.run(command, check=True)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write(Path("output/ci/architecture/diff/diff.md").read_text())
+          PY
+      - name: Render only source-backed diagrams
+        if: ${{ !cancelled() && hashFiles('output/ci/architecture/candidate/graph.json') != '' }}
+        run: |
+          cd tools/architecture
+          npx puppeteer browsers install chrome-headless-shell
+          node render.mjs ../../output/ci/architecture/rendered ../../output/ci/architecture/candidate
+      - run: python3 tools/ci/check.py --name architecture-evidence --output output/ci/architecture/check.json
+      - run: python3 tools/ci/evidence.py --job architecture --directory output/ci/architecture
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: ci-report-architecture-${{ github.sha }}
+          path: output/ci/architecture/
+          retention-days: 14
+          if-no-files-found: error
+
+  coverage:
+    needs: [unit, database]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/ci-toolchain
+        with:
+          native: "false"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: ci-report-*-${{ github.sha }}
+          path: output/coverage-input
+      - name: Merge only compatible revision-bound atomic coverage
+        env:
+          CI_DIFF_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          args=(--input "output/coverage-input/ci-report-unit-$GITHUB_SHA" --input "output/coverage-input/ci-report-database-$GITHUB_SHA" --output output/ci/coverage)
+          if [[ "$CI_DIFF_BASE" =~ ^[0-9a-f]{40}$ && "$CI_DIFF_BASE" != 0000000000000000000000000000000000000000 ]]; then
+            args+=(--base "$CI_DIFF_BASE")
+          fi
+          python3 tools/ci/coverage.py "${args[@]}"
+      - run: python3 tools/ci/evidence.py --job coverage --directory output/ci/coverage
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: ci-report-coverage-${{ github.sha }}
+          path: output/ci/coverage/
+          retention-days: 14
+          if-no-files-found: error
+
+  foundation:
+    if: always()
+    needs: [quality, unit, database, frontend, images, browser, security, architecture, coverage]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: ci-report-*-${{ github.sha }}
+          path: output/foundation-input
+      - name: Required statuses and intact evidence for this exact SHA
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: python3 tools/ci/foundation.py --directory output/foundation-input --output output/foundation.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: foundation-${{ github.sha }}
+          path: output/foundation.json
+          retention-days: 14
+          if-no-files-found: error

@@ -1,17 +1,17 @@
 :root {
   font-family: Inter, 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  color: #20242d;
+  color: var(--ui-ink);
   letter-spacing: 0;
-  --el-color-primary: #4361ee;
+  --el-color-primary: var(--ui-accent);
   --el-border-radius-base: 6px;
-  --el-font-size-base: 13px;
+  --el-font-size-base: 14px;
 }
 * {
   box-sizing: border-box;
 }
 body {
   margin: 0;
-  background: #f7f8fa;
+  background: var(--ui-soft);
 }
 button {
   font: inherit;
@@ -41,7 +41,7 @@ textarea {
   width: 218px;
   flex-shrink: 0;
   background: #fff;
-  border-right: 1px solid #e9ebf0;
+  border-right: 1px solid var(--ui-line);
   display: flex;
   flex-direction: column;
   position: fixed;
@@ -76,7 +76,7 @@ textarea {
 .brand-symbol {
   width: 34px;
   height: 34px;
-  color: #4361ee;
+  color: var(--ui-accent);
   display: grid;
   place-items: center;
 }
@@ -102,6 +102,25 @@ textarea {
   gap: 3px;
   overflow: auto;
 }
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex-shrink: 0;
+  padding-bottom: 12px;
+}
+.nav-group-title {
+  margin: 0;
+  padding: 12px 13px 6px;
+  color: #939baa;
+  font-size: 11px;
+  line-height: 18px;
+  font-weight: 500;
+}
+.sidebar nav button {
+  width: 100%;
+  flex-shrink: 0;
+}
 .sidebar nav button {
   border: 0;
   background: transparent;
@@ -112,7 +131,7 @@ textarea {
   min-height: 43px;
   padding: 10px 13px;
   border-radius: 6px;
-  color: #606775;
+  color: var(--ui-muted);
   font-size: 13px;
 }
 .sidebar nav button .el-icon {
@@ -122,8 +141,8 @@ textarea {
   background: #f6f7fb;
 }
 .sidebar nav button.active {
-  color: #4361ee;
-  background: #eef1ff;
+  color: var(--ui-accent);
+  background: var(--ui-accent-soft);
   font-weight: 600;
 }
 .nav-count {
@@ -166,7 +185,7 @@ textarea {
 .topbar {
   height: 67px;
   background: #fff;
-  border-bottom: 1px solid #e9ebf0;
+  border-bottom: 1px solid var(--ui-line);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -185,7 +204,7 @@ textarea {
 }
 .breadcrumb strong {
   font-weight: 500;
-  color: #4c5361;
+  color: var(--ui-text);
 }
 .topbar-actions {
   display: flex;
@@ -197,6 +216,10 @@ textarea {
 }
 .topbar-actions {
   min-width: 0;
+}
+.mobile-overflow,
+.mobile-page-title {
+  display: none;
 }
 .account-option-status {
   float: right;
@@ -217,7 +240,7 @@ textarea {
 .account-name-button {
   border: 0;
   background: transparent;
-  color: #4361ee;
+  color: var(--ui-accent);
   text-align: left;
   padding: 0;
   overflow-wrap: anywhere;
@@ -295,7 +318,7 @@ textarea {
   place-items: center;
   border-radius: 50%;
   background: #e8edff;
-  color: #4361ee;
+  color: var(--ui-accent);
   font-weight: 600;
   flex-shrink: 0;
 }
@@ -303,6 +326,25 @@ textarea {
   padding: 29px 31px 0;
   max-width: 1800px;
   margin: auto;
+}
+.main-area.messages-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  overflow: hidden;
+}
+.messages-layout > .topbar {
+  flex-shrink: 0;
+}
+.content.messages-content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 16px;
 }
 .page-heading {
   display: flex;
@@ -351,7 +393,7 @@ textarea {
 }
 .metric {
   background: #fff;
-  border: 1px solid #edf0f4;
+  border: 1px solid var(--ui-line-soft);
   border-radius: 7px;
   padding: 22px 24px;
   position: relative;
@@ -389,7 +431,7 @@ textarea {
 }
 .data-section {
   background: #fff;
-  border: 1px solid #edf0f4;
+  border: 1px solid var(--ui-line-soft);
   min-width: 0;
   border-radius: 6px;
   overflow: hidden;
@@ -439,7 +481,7 @@ textarea {
 }
 .capacity-grid > div {
   padding-left: 22px;
-  border-right: 1px solid #edf0f4;
+  border-right: 1px solid var(--ui-line-soft);
 }
 .capacity-grid > div:first-child {
   padding-left: 0;
@@ -529,6 +571,69 @@ textarea {
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+.platform-config-dialog .el-checkbox-group {
+  min-width: 0;
+  max-width: 100%;
+}
+.platform-config-dialog .el-checkbox {
+  height: auto;
+  min-height: 32px;
+  max-width: 100%;
+}
+.platform-config-dialog .el-form-item__content > .el-checkbox {
+  margin-right: 0;
+}
+.platform-config-dialog .el-checkbox .el-checkbox__label {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+.native-settings-dialog {
+  padding: 0;
+  border-radius: 8px !important;
+  max-width: calc(100vw - 24px);
+}
+.native-settings-dialog .el-dialog__header {
+  padding: 18px 48px 14px 20px;
+  margin: 0;
+  border-bottom: 1px solid var(--ui-line-soft);
+}
+.native-settings-dialog .el-dialog__title {
+  display: block;
+  font-size: 15px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.native-settings-dialog .el-dialog__headerbtn {
+  top: 8px;
+  right: 6px;
+}
+.native-settings-dialog .el-dialog__body {
+  padding: 16px 20px !important;
+}
+.native-settings-dialog .el-dialog__footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--ui-line-soft);
+}
+.native-settings-confirm {
+  max-width: calc(100vw - 24px);
+}
+.native-settings-confirm .el-message-box__message {
+  max-height: 40dvh;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 480px) {
+  .native-settings-dialog .el-dialog__body {
+    padding: 12px 16px !important;
+  }
+  .native-settings-dialog .el-dialog__header {
+    padding-left: 16px;
+  }
+  .native-settings-dialog .el-dialog__footer {
+    padding: 12px 16px;
+  }
+}
 .native-auth-dialog .el-dialog__footer {
   display: flex;
   flex-wrap: wrap;
@@ -564,7 +669,7 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f7f8fa;
+  background: var(--ui-soft);
   padding: 30px;
 }
 .login-form {
@@ -587,7 +692,7 @@ textarea {
 .login-form .brand-symbol {
   width: 40px;
   height: 40px;
-  background: #eef1ff;
+  background: var(--ui-accent-soft);
   border-radius: 7px;
 }
 .login-submit {
@@ -672,26 +777,81 @@ textarea {
     display: inline-flex !important;
   }
   .topbar {
-    height: auto;
-    min-height: 60px;
-    padding: 8px 12px;
-    gap: 5px;
+    height: 52px;
+    min-height: 52px;
+    padding: 0 8px;
+    gap: 4px;
+    border: 0;
+    background: #ededed;
+  }
+  .topbar .desktop-action {
+    display: none !important;
+  }
+  .topbar .mobile-menu,
+  .mobile-overflow > .el-button {
+    width: 40px;
+    height: 40px;
+    margin: 0;
+    padding: 0;
+    color: #222;
+    font-size: 20px;
+  }
+  .mobile-overflow {
+    display: inline-flex;
+    flex-shrink: 0;
+    order: 3;
+  }
+  .mobile-page-title {
+    display: block;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 16px;
+    font-weight: 500;
   }
   .breadcrumb {
     display: none;
   }
   .topbar-actions {
-    gap: 5px;
+    gap: 4px;
     flex: 1;
-    justify-content: flex-end;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     min-width: 0;
   }
+  .mobile-page-title + .topbar-actions {
+    flex: 0 1 auto;
+  }
+  .topbar-actions > .el-tooltip__trigger {
+    flex-shrink: 0;
+    order: 2;
+    width: 36px;
+    height: 40px;
+    margin: 0;
+    padding: 0;
+  }
   .account-select {
-    width: 145px;
+    flex: 1;
+    order: 1;
+    width: auto;
+    min-width: 0;
+  }
+  .account-select .el-select__wrapper {
+    min-height: 40px;
+    padding: 0 8px;
+    box-shadow: none !important;
+    background: transparent;
+    font-size: 16px;
+  }
+  .account-select .el-select__selected-item {
+    color: #222;
   }
   .content {
     padding: 22px 15px 0;
+  }
+  .content.messages-content {
+    padding: 0;
   }
   .page-heading {
     align-items: flex-start;
@@ -767,5 +927,50 @@ textarea {
   }
   .permission-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+.business-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  padding-bottom: 20px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.business-context-title {
+  font-weight: 600;
+}
+.business-context .el-select {
+  width: 240px;
+  max-width: 100%;
+  margin-left: auto;
+}
+.business-directory {
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+.business-entry {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  padding: 24px 8px;
+  border: 0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  color: var(--el-text-color-primary);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.business-entry:hover {
+  background: var(--el-fill-color-light);
+}
+.business-entry > .el-icon:last-child {
+  margin-left: auto;
+}
+@media (max-width: 600px) {
+  .business-context .el-select {
+    width: 100%;
+    margin-left: 0;
   }
 }

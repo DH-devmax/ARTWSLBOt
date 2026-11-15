@@ -9,9 +9,10 @@
   },
   "provider": {
     "base_url": "https://www.sevnx.lol/v1",
-    "model": "deepseek-v4.1-flash",
+    "model": "gpt-6.1-sol",
     "credential_env": "ARCHITECTURE_OPENAI_API_KEY",
     "max_analysis_seconds": 600,
+    "max_request_seconds": 120,
     "max_output_tokens": 4096
   },
   "views": ["system", "backend", "frontend", "agents"],

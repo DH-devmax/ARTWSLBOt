@@ -5,7 +5,41 @@
       <ElTag type="warning" effect="plain">Go 引擎迁移中 · 未开放发言</ElTag>
     </div>
     <ElAlert v-if="error" class="console-alert" :title="error" type="error" :closable="false" />
-    <template v-if="configurable">
+    <template v-if="section === 'plugins'">
+      <ElEmpty
+        v-if="!extensions.length && !loading"
+        description="扩展目录尚未采集"
+        :image-size="48"
+      />
+      <div class="extension-directory" role="list" aria-label="可选扩展目录">
+        <section v-for="row in extensions" :key="row.id" class="extension-row" role="listitem">
+          <strong class="extension-name">{{ row.name }}</strong>
+          <span class="extension-scope">{{ scopeLabels[row.scope] || '未提供' }}</span>
+          <ElTag class="extension-status" type="info">{{
+            statusLabels[row.status] || '状态未适配'
+          }}</ElTag>
+          <div class="extension-toggle">
+            <ElTooltip content="运行链路尚未接入">
+              <span
+                ><ElSwitch :model-value="false" disabled :aria-label="`${row.name}运行开关`"
+              /></span>
+            </ElTooltip>
+          </div>
+          <div class="extension-action">
+            <ElButton
+              v-if="['learning', 'memory'].includes(row.id)"
+              link
+              type="primary"
+              :icon="Setting"
+              @click="emit('navigate', `ai-${row.id}`)"
+              >账号默认设置</ElButton
+            >
+            <span v-else class="muted">待接入</span>
+          </div>
+        </section>
+      </div>
+    </template>
+    <template v-else-if="configurable">
       <ElEmpty v-if="!account" description="尚未选择机器人面板" :image-size="64" />
       <ElForm
         v-else-if="loaded"
@@ -14,6 +48,13 @@
         :disabled="saving"
         @submit.prevent="save"
       >
+        <ElAlert
+          v-if="['learning', 'memory'].includes(section)"
+          title="仅保存账号默认值；扩展尚未接入，当前不运行学习或检索。"
+          type="info"
+          :closable="false"
+          class="console-alert"
+        />
         <template v-if="section === 'chat'">
           <ElFormItem label="申请启用聊天"><ElSwitch v-model="form.enabled" /></ElFormItem>
           <div class="console-fields">
@@ -78,7 +119,7 @@
           >
         </template>
         <template v-else-if="section === 'learning'">
-          <ElFormItem label="申请启用学习"><ElSwitch v-model="form.enabled" /></ElFormItem>
+          <ElFormItem label="学习启用意向"><ElSwitch v-model="form.enabled" /></ElFormItem>
           <ElFormItem label="表达学习"><ElSwitch v-model="form.expressions" /></ElFormItem>
           <ElFormItem label="黑话学习"><ElSwitch v-model="form.jargon" /></ElFormItem>
           <ElFormItem label="派生数据保留（天）"
@@ -92,7 +133,7 @@
           >
         </template>
         <template v-else-if="section === 'memory'">
-          <ElFormItem label="申请启用长期记忆"><ElSwitch v-model="form.enabled" /></ElFormItem>
+          <ElFormItem label="记忆启用意向"><ElSwitch v-model="form.enabled" /></ElFormItem>
           <div class="console-fields">
             <ElFormItem label="检索条数"
               ><ElInputNumber v-model="form.top_k" :min="1" :max="20"
@@ -157,13 +198,13 @@
 
 <script setup lang="ts">
   import { computed, onBeforeUnmount, ref, watch } from 'vue'
-  import { Check, Refresh } from '@element-plus/icons-vue'
+  import { Check, Refresh, Setting } from '@element-plus/icons-vue'
   import { ElMessage } from 'element-plus'
   import { api, type Row } from './api'
   import { useSession } from './store'
 
   const props = defineProps<{ account: string; section: string; title: string }>()
-  const emit = defineEmits<{ updated: [] }>()
+  const emit = defineEmits<{ updated: []; navigate: [page: string] }>()
   const session = useSession()
   const configurable = computed(() =>
     ['chat', 'models', 'learning', 'memory'].includes(props.section)
@@ -176,9 +217,14 @@
     version = ref(0),
     capabilities = ref<Row[]>([]),
     events = ref<Row[]>([])
+  const extensions = computed(() =>
+    capabilities.value.filter((item) =>
+      ['learning', 'memory', 'people', 'emoji', 'plugins'].includes(item.id)
+    )
+  )
   const statusLabels: Record<string, string> = {
-    configuration_only: '配置已迁移 · 运行待验收',
-    engine_pending: 'Go 能力迁移待完成',
+    configuration_only: '仅有配置 · 未接入运行',
+    engine_pending: '未接入',
     isolation_blocked: '隔离验收前禁用',
     runbook_only: '迁移手册已提供',
     docker_only: '仅 Docker 发布'
@@ -294,3 +340,55 @@
     form.value = {}
   })
 </script>
+<style scoped>
+  .extension-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1.2fr) 44px 140px;
+    align-items: center;
+    gap: 18px;
+    padding: 20px 0;
+    border-bottom: 1px solid var(--el-border-color-lighter);
+    font-size: 13px;
+  }
+  .extension-name {
+    overflow-wrap: anywhere;
+  }
+  .extension-scope {
+    color: var(--el-text-color-secondary);
+  }
+  .extension-status {
+    justify-self: start;
+    max-width: 100%;
+    height: auto;
+    min-height: 24px;
+    white-space: normal;
+  }
+  .extension-action {
+    justify-self: end;
+  }
+  .extension-toggle {
+    justify-self: end;
+  }
+  @media (max-width: 900px) {
+    .extension-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-areas: 'name toggle' 'status status' 'scope action';
+      gap: 10px 14px;
+    }
+    .extension-name {
+      grid-area: name;
+    }
+    .extension-scope {
+      grid-area: scope;
+    }
+    .extension-status {
+      grid-area: status;
+    }
+    .extension-toggle {
+      grid-area: toggle;
+    }
+    .extension-action {
+      grid-area: action;
+    }
+  }
+</style>

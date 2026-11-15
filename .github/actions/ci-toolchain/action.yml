@@ -1,0 +1,33 @@
+name: Repository CI toolchain
+description: Install the source-selected Go toolchain and isolated verification tools
+inputs:
+  web:
+    description: Install product frontend dependencies
+    default: "false"
+  native:
+    description: Install the Linux sodium build prerequisite
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      with:
+        python-version: "3.13"
+    - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      with:
+        node-version: "22"
+    - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      with:
+        go-version-file: go.mod
+        cache: false
+    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      with:
+        version: 11.15.1
+    - if: inputs.native == 'true'
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends libsodium-dev pkg-config
+    - if: inputs.web == 'true'
+      shell: bash
+      run: pnpm --dir web install --frozen-lockfile --ignore-scripts

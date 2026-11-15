@@ -1,9 +1,12 @@
 // Every API request is synthetic in this smoke; no native or business action is sent.
+// The retired in-page group editor is covered by feature_rules_ui_smoke.js,
+// including account/platform draft retention and late feature-response fences.
 // prettier-ignore
-async (page) => {
+async (page, fixtureMe) => {
   if (new URL(page.url()).origin !== 'http://127.0.0.1:5173') throw new Error('Local UI only')
   const original = await page.evaluate(() => Object.fromEntries(Object.entries(sessionStorage).filter(([key]) => key.startsWith('wsl:'))))
-  const realMe = (await (await page.request.get('http://127.0.0.1:5173/api/v1/me')).json()).data
+  const realMe = fixtureMe ? { ...fixtureMe, permissions: [...new Set([...fixtureMe.permissions, 'personas:read'])] } : { user: { id: '10000000-0000-4000-8000-000000000099', role: 'superadmin' },
+    permissions: ['overview:read', 'accounts:read', 'groups:read', 'operations:read', 'workspaces:maibot'] }
   if (realMe.user.role !== 'superadmin') throw new Error('Website superadmin session required')
   const id = (n) => `10000000-0000-4000-8000-${String(n).padStart(12, '0')}`
   const accounts = {
@@ -41,6 +44,8 @@ async (page) => {
         user: { id: id(99), username: '只读测试用户', role: 'user', tenant_id: id(98) },
         permissions: ['overview:read', 'accounts:read', 'groups:read', 'operations:read']
       } : realMe
+      else if (path === '/workspaces') result = { items: [{ id: 'wsl', name: '旺商聊机器人' },
+        ...(!viewer ? [{ id: 'maibot', name: '热群机器人' }] : [])] }
       else if (path === '/accounts') {
         result = [...accounts[workspace]]
         if (workspace === 'wsl' && delayAccounts) {
@@ -49,7 +54,12 @@ async (page) => {
           delayedSeen()
           await new Promise((resolve) => { releaseAccounts = resolve })
         }
-      } else if (path === '/groups') result = workspace === 'wsl' ? groups : [
+      } else if (path === '/user-center') result = { groups: [], operations: [], permissions: [
+        'overview:read', 'accounts:read', 'groups:read', 'operations:read'
+      ], subscription: { active: true, platforms: ['wsl'], modules: [], group_limit: 30 } }
+      else if (path === '/user-center/groups') result = { items: groups, total: groups.length, page: 1, page_size: 20 }
+      else if (path === '/user-center/usage') result = { call_count: 0, actual_micro: 0, held_micro: 0 }
+      else if (path === '/groups') result = workspace === 'wsl' ? groups : [
         { group_id: id(11), name: '隔离群甲', ai_account_id: id(3), account_name: '聊天甲', ai_request_state: 'disabled', version: 1 }
       ]
       else if (path === '/personas') result = [{
@@ -103,6 +113,8 @@ async (page) => {
   const choose = async (name, option) => {
     if (name === '切换工作台') {
       await page.getByRole('button', { name, exact: true }).click()
+      await page.getByRole('dialog', { name: '选择平台', exact: true })
+        .getByRole('button', { name: option.startsWith('MaiBot') ? '热群机器人' : '旺商聊机器人', exact: true }).click()
       return
     }
     await page.getByRole('combobox', { name, exact: true })
@@ -110,8 +122,18 @@ async (page) => {
     await page.getByRole('option').filter({ hasText: option }).click()
   }
   const navigate = async (name) => page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name, exact: true }).click()
-  const edit = async (name) => page.getByRole('row').filter({ hasText: name }).getByRole('button', { name: '群配置', exact: true }).click()
-  const configDialog = () => page.locator('.platform-config-dialog')
+  const openNew = async purpose => {
+    if (await page.locator('.native-login-entry').isVisible())
+      await page.locator('.native-login-entry').click()
+    else {
+      await page.getByRole('button', { name: '更多操作', exact: true }).click()
+      await page.getByRole('menuitem', { name: /^(账号登录|注册 \/ 登录)$/ }).click()
+    }
+    const picker = page.getByRole('dialog', { name: '添加机器人', exact: true })
+    await picker.getByRole('button', { name: purpose === 'chat' ? '热群机器人' : '群管机器人', exact: true }).click()
+    await picker.getByRole('button', { name: '旺商聊', exact: true }).click()
+    await page.getByLabel('机器人名称', { exact: true }).waitFor()
+  }
   await page.route(pattern, handler)
   try {
     await page.evaluate(() => {
@@ -128,17 +150,12 @@ async (page) => {
     if (await nav.getByRole('button', { name: 'AI 人设' }).count()) throw new Error('WSL includes AI engine settings')
     await choose('机器人面板', '群管甲')
     await navigate('群组管理')
-    await edit('隔离群甲')
-    await page.getByLabel('拦截词（一行一个）', { exact: true }).fill('只属于群管甲的草稿')
-    await configDialog().getByRole('button', { name: '取消', exact: true }).click()
+    await page.getByRole('row').filter({ hasText: '隔离群甲' }).waitFor()
     await choose('机器人面板', '群管乙')
-    await edit('隔离群乙')
-    if (await page.getByLabel('拦截词（一行一个）', { exact: true }).inputValue() !== '') throw new Error('Account draft leaked')
-    await configDialog().getByRole('button', { name: '取消', exact: true }).click()
+    await page.getByRole('row').filter({ hasText: '隔离群乙' }).waitFor()
+    if (await page.getByRole('row').filter({ hasText: '隔离群甲' }).count()) throw new Error('Group list crossed account scopes')
     await choose('机器人面板', '群管甲')
-    await edit('隔离群甲')
-    if (await page.getByLabel('拦截词（一行一个）', { exact: true }).inputValue() !== '只属于群管甲的草稿') throw new Error('Draft was lost on account switching')
-    await configDialog().getByRole('button', { name: '取消', exact: true }).click()
+    await page.getByRole('row').filter({ hasText: '隔离群甲' }).waitFor()
     if (writes.length) throw new Error('Panel switching mutated a connection or configuration')
     // A slow response from WSL must not populate the MaiBot workspace.
     const seen = new Promise((resolve) => { delayedSeen = resolve })
@@ -146,9 +163,10 @@ async (page) => {
     await page.getByRole('button', { name: '刷新', exact: true }).click()
     await seen
     await choose('切换工作台', 'MaiBot 工作台')
+    await navigate('工作台')
     await page.getByRole('heading', { name: '聊天机器人状态', exact: true }).waitFor()
     releaseAccounts()
-    await page.getByRole('row').filter({ hasText: '聊天甲' }).waitFor()
+    await page.getByRole('button', { name: '查看账号 聊天甲', exact: true }).waitFor()
     for (const name of ['群组管理', '用户管理', 'SaaS 套餐', '财务台账', '操作记录', '受控测试']) {
       if (await nav.getByRole('button', { name, exact: true }).count()) throw new Error(`MaiBot includes management: ${name}`)
     }
@@ -158,17 +176,11 @@ async (page) => {
     await page.getByText('独立聊天人设', { exact: true }).waitFor()
     await choose('切换工作台', '旺商聊工作台')
     await page.getByRole('heading', { name: '群组管理', exact: true }).waitFor()
-    await edit('隔离群甲')
-    if (await page.getByLabel('拦截词（一行一个）', { exact: true }).inputValue() !== '只属于群管甲的草稿') throw new Error('Workspace draft was lost')
-    await configDialog().getByRole('button', { name: '取消', exact: true }).click()
+    await page.getByRole('row').filter({ hasText: '隔离群甲' }).waitFor()
     if (writes.length) throw new Error('Workspace switching dispatched a native action')
     // Creation happens inside the auth form, with the selected workspace captured.
-    await page.locator('.native-login-entry').click()
-    await page.getByLabel('机器人名称', { exact: true }).waitFor()
+    await openNew('management')
     if (writes.length) throw new Error('Opening the auth form created an empty account')
-    await page.getByRole('tab', { name: '新账号注册', exact: true }).click()
-    await page.getByLabel('注册手机号', { exact: true }).waitFor()
-    await page.getByRole('tab', { name: '原生登录', exact: true }).click()
     await page.getByLabel('机器人名称', { exact: true }).fill('表单新建群管')
     await page.getByLabel('账号 / 手机号', { exact: true }).fill('13800000000')
     await page.getByLabel('原生账号密码', { exact: true }).fill('synthetic-ui-only1')
@@ -187,7 +199,7 @@ async (page) => {
     await page.getByRole('button', { name: '关闭面板', exact: true }).click()
     await choose('切换工作台', 'MaiBot 工作台')
     await page.getByRole('heading', { name: 'AI 人设', exact: true }).waitFor()
-    await page.locator('.native-login-entry').click()
+    await openNew('chat')
     await page.getByLabel('机器人名称', { exact: true }).fill('表单新建聊天')
     await page.getByLabel('账号 / 手机号', { exact: true }).fill('13900000000')
     await page.getByLabel('原生账号密码', { exact: true }).fill('synthetic-chat-only1')
@@ -203,9 +215,15 @@ async (page) => {
     await choose('机器人面板', '工作台总览')
     await page.locator('.overview-grid').getByText('在线', { exact: true }).waitFor()
     await page.screenshot({ path: 'output/playwright/workspaces-desktop.png', fullPage: true, animations: 'disabled' })
-    for (const viewport of [{ width: 320, height: 740 }, { width: 390, height: 844 }, { width: 647, height: 779 }]) {
+    for (const viewport of [{ width: 320, height: 740 }, { width: 390, height: 844 }, { width: 768, height: 900 }, { width: 1440, height: 960 }]) {
       await page.setViewportSize(viewport)
       await page.evaluate(() => window.scrollTo(0, 0))
+      await page.evaluate(async () => {
+        await Promise.all(document.getAnimations().filter(animation =>
+          animation.effect?.getComputedTiming().iterations !== Infinity)
+          .map(animation => animation.finished.catch(() => {})))
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      })
       const overflow = await page.evaluate(() => {
         const bar = document.querySelector('.topbar')
         const rect = bar.getBoundingClientRect()
@@ -217,9 +235,11 @@ async (page) => {
           })
         }
       })
-      if (overflow.page || overflow.controls) throw new Error(`Topbar overflow ${JSON.stringify({ viewport, overflow })}`)
-      await page.locator('.native-login-entry').click()
-      await page.getByLabel('机器人名称', { exact: true }).waitFor()
+      if (overflow.page || overflow.controls) {
+        await page.screenshot({ path: `output/playwright/workspaces-overflow-${viewport.width}.png`, fullPage: true })
+        throw new Error(`Topbar overflow ${JSON.stringify({ viewport, overflow })}`)
+      }
+      await openNew('management')
       const bounds = await page.locator('.native-auth-dialog').boundingBox()
       if (!bounds || bounds.x < 0 || bounds.y < 0 || bounds.x + bounds.width > viewport.width + 1 || bounds.y + bounds.height > viewport.height + 1) throw new Error('Auth dialog exceeds viewport')
       await page.screenshot({ path: `output/playwright/workspaces-${viewport.width}.png`, fullPage: true, animations: 'disabled' })
@@ -228,16 +248,25 @@ async (page) => {
     viewer = true
     await page.setViewportSize({ width: 1440, height: 960 })
     await page.reload()
-    await page.getByRole('button', { name: '只读测试用户' }).waitFor()
-    if (await page.getByRole('button', { name: '切换工作台' }).count() ||
-        await page.locator('.native-login-entry').count()) throw new Error('Tenant sees platform or native credentials controls')
-    await navigate('群组管理')
+    await page.getByRole('button', { name: '用户菜单', exact: true })
+      .getByText('只读测试用户', { exact: true }).waitFor()
+    if (await page.locator('.native-login-entry').count() ||
+        await page.locator('.console-switch').count()) throw new Error('Tenant sees admin or native credentials controls')
+    // Platform switching is a read-only view operation for authorized tenants.
+    await page.getByRole('button', { name: '切换工作台', exact: true }).click()
+    const tenantPicker = page.getByRole('dialog', { name: '选择平台', exact: true })
+    const tenantPlatforms = await tenantPicker.locator('.workspace-item').allTextContents()
+    if (tenantPlatforms.length !== 1 || tenantPlatforms[0].trim() !== '旺商聊机器人')
+      throw new Error('Tenant platform picker exceeded its authorized panels')
+    await tenantPicker.getByRole('button', { name: '旺商聊机器人', exact: true }).click()
+    await page.locator('.user-center').waitFor()
     if (await page.getByRole('button', { name: '群配置', exact: true }).count() ||
         await page.getByRole('button', { name: 'AI 入群 / 启停', exact: true }).count()) throw new Error('Read-only user sees management controls')
     return {
       result: 'passed', accountSwitchWrites: 0, workspaceSwitchWrites: 0,
       createdPanels: { wsl: created.length, maibot: chatCreate.length }, nativeRequests: 'all intercepted',
-      checked: ['separate account pools', 'draft preservation', 'late response isolation', 'topbar auth', 'viewer permissions', '320/390/647/1440 layouts']
+      checked: ['separate account pools', 'account selection retention', 'late response isolation', 'topbar auth', 'viewer permissions', '320/390/768/1440 layouts'],
+      replacement_coverage: { retired_group_editor: 'feature_rules_ui_smoke.js: scoped feature drafts, version conflicts and late responses' }
     }
   } finally {
     if (releaseAccounts) releaseAccounts()

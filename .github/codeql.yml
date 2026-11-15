@@ -1,0 +1,13 @@
+name: Product Go and Vue sources
+paths:
+  - cmd
+  - internal
+  - web/src/wsl
+  - web/src/components/core/charts
+paths-ignore:
+  - "**/node_modules/**"
+  - "**/vendor/**"
+  - "**/third_party/**"
+  - "**/var/**"
+queries:
+  - uses: security-and-quality

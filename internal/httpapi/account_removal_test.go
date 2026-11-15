@@ -28,7 +28,7 @@ func TestPostgresAccountRemoval(t *testing.T) {
 		t.Fatal(err)
 	}
 	vault, _ := security.NewVault(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{21}, 32)))
-	s := New(db, vault, "http://127.0.0.1:5173", false)
+	s := newCaptchaTestServer(db, vault, "http://127.0.0.1:5173", false)
 	t.Cleanup(s.Native.Close)
 	server := httptest.NewServer(s.Handler())
 	t.Cleanup(server.Close)
@@ -165,7 +165,7 @@ func TestPostgresAccountRemoval(t *testing.T) {
 	})
 	// Synthetic auth manager flow only; never construct a native network client.
 	s.Native.Factory = func(nativeauth.Deployment) (nativeauth.AuthClient, error) { return &isolatedAuth{uid: 7654321}, nil }
-	flow, err := s.Native.Start(actor, primary, nativeauth.Deployment{}, nil)
+	flow, err := s.Native.Start(actor, primary, nativeauth.Deployment{ProtocolVersion: nativeauth.DesktopProtocolVersion}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestPostgresAccountRemoval(t *testing.T) {
 		key := base64.StdEncoding.EncodeToString(make([]byte, 32))
 		d := nativeauth.Deployment{Origin: "https://example.invalid", Headers: map[string]string{},
 			Metadata: make([]uint64, 14), SigningSeed: key, BodyKey: key, ServerKey: key,
-			CaptchaID: "synthetic-captcha", DeviceID: "synthetic-device", ProtocolVersion: "3.7.3"}
+			CaptchaID: "synthetic-captcha", DeviceID: "synthetic-device", ProtocolVersion: nativeauth.DesktopProtocolVersion}
 		encoded, _ := json.Marshal(d)
 		expect(t, admin, "PUT", "/native-deployment", map[string]any{"version": 0, "configuration": string(encoded)}, 200)
 		fake := &isolatedAuth{block: true, start: make(chan struct{}), done: make(chan struct{}), uid: 7654321}

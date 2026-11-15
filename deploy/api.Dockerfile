@@ -1,7 +1,8 @@
-FROM golang:1.27.0-alpine AS build
+FROM golang:1.27.4-alpine AS build
 RUN apk add --no-cache gcc musl-dev pkgconf libsodium-dev
 WORKDIR /src
 COPY go.mod go.sum ./
+COPY third_party/gopsutil ./third_party/gopsutil
 RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal

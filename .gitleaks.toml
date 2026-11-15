@@ -12,7 +12,7 @@ regexTarget = "secret"
 regexes = ['''^[0-9a-f]{64}$''']
 
 [[rules.allowlists]]
-description = "Source SHA-256 checksums in the generated architecture manifest"
+description = "Generated source and view SHA-256 hashes; architecture check verifies this manifest"
 condition = "AND"
 paths = ['''^docs/architecture/generated/manifest\.json$''']
 regexTarget = "secret"
@@ -24,3 +24,24 @@ condition = "AND"
 paths = ['''^internal/httpapi/integration_test\.go$''']
 regexTarget = "secret"
 regexes = ['''^fixture-finance-00[12]$''']
+
+[[rules.allowlists]]
+description = "Fixed public historical Docker tag, not a credential"
+condition = "AND"
+paths = ['''^docs/test-report\.md$''']
+regexTarget = "secret"
+regexes = ['''^acceptance-observations-20261031$''']
+
+[[rules.allowlists]]
+description = "Fixed internal gateway URL path, not an API key"
+condition = "AND"
+paths = ['''^internal/heatbot/gateway\.go$''']
+regexTarget = "secret"
+regexes = ['''^8080/internal/v1/ai/generate$''']
+
+[[rules.allowlists]]
+description = "Fixed synthetic password in the isolated native-security fixture"
+condition = "AND"
+paths = ['''^internal/httpapi/native_security_test\.go$''']
+regexTarget = "secret"
+regexes = ['''^private-new12$''']

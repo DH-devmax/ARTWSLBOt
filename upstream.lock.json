@@ -3,6 +3,21 @@
     "repository": "https://github.com/sh492773746/AstrBot.git",
     "commit": "a672ef93cb7dbfb854ae01ff131267b9e8a1e050"
   },
+  "astrbot_lajiaoliao": {
+    "repository": "https://github.com/sh492773746/AstrBot.git",
+    "commit": "e62e2ce12e7d8591afe995c56478205224294afd",
+    "usage": "LajiaoLiao plugin and Go bridge wire reference; no upstream runtime or per-account process"
+  },
+  "astrbot_media": {
+    "repository": "https://github.com/sh492773746/AstrBot.git",
+    "commit": "5ff5113074304e6c2fe89483d3497f727620176d",
+    "usage": "Supplementary authenticated image metadata and fixed-line download reference; original protocol baseline unchanged"
+  },
+  "astrbot_business_reference": {
+    "repository": "https://github.com/sh492773746/AstrBot.git",
+    "commit": "5ff5113074304e6c2fe89483d3497f727620176d",
+    "usage": "Business feature comparison and bounded literal-rule scenarios only; existing Go control, persistence and admission retained; no Python runtime or source files imported"
+  },
   "art_design_pro": {
     "repository": "https://github.com/Daymychen/art-design-pro.git",
     "commit": "f3aaf58eec1a0e988f162352c33862327a484f95"
@@ -17,11 +32,31 @@
     "commit": "9f211c0d799ebc57463d465fc7a34ce39a9e3754",
     "usage": "architecture reference only; no source copied"
   },
+  "eino": {
+    "repository": "https://github.com/cloudwego/eino.git",
+    "commit": "0a5ca53b9d3bf7b661dccc863465ec568a421eea",
+    "version": "v0.9.22",
+    "usage": "Bounded ChatModelAgent Runtime adapter only; module checksums in go.sum"
+  },
+  "bifrost_reference": {
+    "repository": "https://github.com/maximhq/bifrost.git",
+    "commit": "6aae0e790012f0e93c495ec967d9f5cd48dae4df",
+    "usage": "Model routing, budget and usage design reference only; no source, service or UI copied"
+  },
+  "gopsutil": {
+    "repository": "https://github.com/shirou/gopsutil.git",
+    "commit": "81236e0193191e972dfdf1e15cc1ae53764dc1e0",
+    "version": "v4.26.9",
+    "module_checksum": "h1:CaBo/hBFqvlJoLvAQEKdHdf5GD97/MN2ACfyv63+2Ig=",
+    "local_source": "third_party/gopsutil",
+    "patched_cpu_sha256": "b0da199adedb4b67ee1a27af9950c59708f2c71ecd2552e3654c5f0493eb3ec1",
+    "usage": "Linux own-PID RSS only; package CPU sampling initializer removed; see third_party/README.md"
+  },
   "simon": {
     "repository": "https://github.com/alibahmanyar/simon.git",
     "commit": "3778d2fc30704aa4e9f8828567c08dd7d6957c7d",
     "image_revision": "699f5a0bd2902a949d5dc89c0a7b323653ed2c04",
     "image": "alibahmanyar/simon:0.3.7@sha256:f227b10dd5ec15d00167a1ad931b4c17fd2478ae9e521e61dac5f7b7ad59801a",
-    "usage": "private restricted metrics sidecar; no upstream UI or privileged mounts"
+    "usage": "retired 2026-11-03; historical provenance and license only; no runtime service"
   }
 }

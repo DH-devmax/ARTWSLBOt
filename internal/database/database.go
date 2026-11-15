@@ -18,6 +18,13 @@ type DB struct {
 	Tenant   *pgxpool.Pool
 }
 
+type actorContextKey struct{}
+
+// WithActor carries a website identity only from the authenticated API boundary.
+func WithActor(ctx context.Context, actor string) context.Context {
+	return context.WithValue(ctx, actorContextKey{}, actor)
+}
+
 func Open(ctx context.Context, platformURL, tenantURL string) (*DB, error) {
 	if platformURL == "" || tenantURL == "" || platformURL == tenantURL {
 		return nil, fmt.Errorf("distinct platform and tenant database URLs are required")
@@ -75,12 +82,28 @@ func (d *DB) Close() {
 
 // TenantTx always sets the tenant inside the transaction, never on a pooled session.
 func (d *DB) TenantTx(ctx context.Context, tenant string, fn func(pgx.Tx) error) error {
+	actor, _ := ctx.Value(actorContextKey{}).(string)
+	return d.ActorTenantTx(ctx, tenant, actor, fn)
+}
+
+// ActorTenantTx sets all scopes locally; pooled connections never retain identity.
+func (d *DB) ActorTenantTx(ctx context.Context, tenant, actor string, fn func(pgx.Tx) error) error {
+	return d.ActorTenantDomainTx(ctx, tenant, actor, "wsl", fn)
+}
+
+func (d *DB) ActorTenantDomainTx(ctx context.Context, tenant, actor, domain string, fn func(pgx.Tx) error) error {
+	if domain != "wsl" && domain != "lajiaoliao" {
+		return fmt.Errorf("invalid tenant domain")
+	}
 	tx, err := d.Tenant.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
 	if _, err = tx.Exec(ctx, `SELECT set_config('app.tenant_id',$1,true)`, tenant); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `SELECT set_config('app.actor_id',$1,true),set_config('app.domain',$2,true)`, actor, domain); err != nil {
 		return err
 	}
 	if err = fn(tx); err != nil {

@@ -15,13 +15,16 @@ import sys
 import tempfile
 import threading
 
-from architecture import ROOT, HERE, candidate_files, digest, json_text, run, write_changed
-from provider import CONFIG, PRIVATE, private_dir, read_key, request
+from common import ROOT, HERE, candidate_files, digest, json_text, run
+import baseline as baselines
+from provider import CONFIG, PRIVATE, ProviderError, private_dir, read_key, request
 
 MAX_REQUESTS = 16
 MAX_RESERVED_TOKENS = 300_000
-TOOLCHAIN = json.loads((HERE / "toolchain.json").read_text())
-CACHE = Path.home() / ".cache/artwslbot/architecture/analysis"
+
+
+class RelayBudgetExceeded(ValueError):
+    pass
 
 
 def allowed_source(name):
@@ -114,7 +117,8 @@ def promote(output, baseline, state_path, state):
 
 @contextmanager
 def relay():
-    ledger = {"requests": 0, "reserved_tokens": 0, "reported_tokens": 0, "usage_unknown": 0}
+    ledger = {"requests": 0, "reserved_tokens": 0, "reported_tokens": 0, "usage_unknown": 0,
+              "provider_failures": {}, "local_rejections": {}, "estimated_tokens": 0}
     lock = threading.Lock()
     token = secrets.token_urlsafe(32)
 
@@ -137,24 +141,43 @@ def relay():
                 # UTF-8 bytes are a deliberately conservative input token upper bound.
                 reserve = size + data["max_tokens"]
                 with lock:
-                    if ledger["requests"] >= MAX_REQUESTS or ledger["reserved_tokens"] + reserve > MAX_RESERVED_TOKENS:
-                        raise ValueError("analysis_budget_exceeded")
+                    if ledger["requests"] >= MAX_REQUESTS:
+                        raise RelayBudgetExceeded("request_limit")
+                    if ledger["reserved_tokens"] + reserve > MAX_RESERVED_TOKENS:
+                        raise RelayBudgetExceeded("reserved_token_limit")
                     ledger["requests"] += 1
                     ledger["reserved_tokens"] += reserve
+                    ledger["estimated_tokens"] += reserve
                     ledger["usage_unknown"] += 1
-                response = request("/chat/completions", data)
+                try:
+                    response = request("/chat/completions", data)
+                except ProviderError as error:
+                    category = (f"http_{error.http_status}" if error.reason == "http_error"
+                                else error.reason)
+                    with lock:
+                        failures = ledger["provider_failures"]
+                        failures[category] = failures.get(category, 0) + 1
+                    raise
                 usage_data = response.get("usage")
                 usage = usage_data.get("total_tokens") if isinstance(usage_data, dict) else None
                 with lock:
                     if type(usage) is int and usage >= 0:
                         ledger["reported_tokens"] += usage
                         ledger["usage_unknown"] -= 1
+                        # Keep actual known usage plus all unknown/in-flight estimates charged.
+                        ledger["reserved_tokens"] += usage - reserve
                 body = json.dumps(response).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+            except RelayBudgetExceeded as error:
+                with lock:
+                    rejections = ledger["local_rejections"]
+                    category = str(error)
+                    rejections[category] = rejections.get(category, 0) + 1
+                self.send_error(429, "Architecture analysis budget exhausted")
             except (ValueError, OSError, TypeError):
                 # No raw provider errors, prompts, credential or source in HTTP errors.
                 self.send_error(502, "Architecture provider unavailable or run budget exhausted")
@@ -170,40 +193,12 @@ def relay():
         server.server_close()
 
 
-def analyze(initialize=False):
-    os.umask(0o077)
+def execute(source, ctx, result, initialize=False):
     private_dir(PRIVATE)
-    private_dir(CACHE)
     read_key()  # Fail before copying source or installing language servers if unconfigured.
+    CACHE = ctx["cache"]
     baseline = CACHE / "baseline"
     state_path = CACHE / "state.json"
-    source = source_manifest()
-    settings = digest({"toolchain": TOOLCHAIN,
-                       "ignore": (ROOT / ".codeboarding/.codeboardingignore").read_text(),
-                       "runner": [hashlib.sha256((HERE / n).read_bytes()).hexdigest()
-                                  for n in ("analyze.py", "codeboarding_entry.py", "requirements.lock")]})
-    if initialize:
-        if state_path.exists() or baseline.exists():
-            raise ValueError("A baseline already exists; use incremental, not automatic full replacement")
-    else:
-        if not state_path.is_file() or not (baseline / "analysis.json").is_file():
-            raise ValueError("No trusted baseline; explicitly run --initialize once")
-        state = json.loads(state_path.read_text())
-        if state["settings_hash"] != settings:
-            raise ValueError("Baseline toolchain differs; review and archive it before explicit initialization")
-        if os.getenv("GITHUB_ACTIONS") == "true":
-            current_branch = os.environ.get("GITHUB_REF", "")
-            if state.get("trusted_ref") != current_branch or not current_branch.startswith("refs/heads/"):
-                raise ValueError("Untrusted CI baseline origin")
-            subprocess.run(["git", "merge-base", "--is-ancestor", state["commit"], "HEAD"],
-                           cwd=ROOT, check=True, capture_output=True)
-
-    # Only analysis artifacts are deserialized. Upstream's separately installed
-    # language servers contain legitimate npm executable symlinks.
-    trusted_paths = ([state_path, baseline, *baseline.rglob("*")] if baseline.exists() else [])
-    for path in trusted_paths:
-        if path.is_symlink() or path.stat().st_uid != os.getuid() or path.stat().st_mode & 0o022:
-            raise ValueError("Untrusted analysis cache permissions")
     snapshot = CACHE / "source"
     if snapshot.exists():
         shutil.rmtree(snapshot)
@@ -211,7 +206,10 @@ def analyze(initialize=False):
     for name in source:
         destination = snapshot / name
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ROOT / name, destination)
+        content = (ROOT / name).read_bytes()
+        if hashlib.sha256(content).hexdigest() != source[name]:
+            raise ValueError("Source changed while preparing snapshot; rerun after edits finish")
+        destination.write_bytes(content)
     (snapshot / ".codeboarding").mkdir()
     shutil.copyfile(ROOT / ".codeboarding/.codeboardingignore", snapshot / ".codeboarding/.codeboardingignore")
     # The snapshot is its own synthetic Git repository: upstream cannot access
@@ -234,8 +232,7 @@ def analyze(initialize=False):
                "--local", str(snapshot), "--output-dir", str(output), "--project-name", "ARTWSLBOt"]
     if initialize:
         command += ["--depth-cap", "1"]
-    status = "failed"
-    ledger = {}
+    ledger = dict(result["usage"])
     try:
         with relay() as (base_url, relay_token, ledger):
             env = {key: os.environ[key] for key in ("PATH", "SYSTEMROOT", "TMPDIR") if key in os.environ}
@@ -262,27 +259,68 @@ def analyze(initialize=False):
                     raise ValueError(f"CodeBoarding exited {returncode}; private diagnostics: {attempt.name}")
                 out.seek(0)
                 analysis = validate_result(out.read(), output / "analysis.json", not initialize)
-            state = {"schema_version": 1, "settings_hash": settings, "source_hash": digest(source),
-                     "source_files": len(source), "commit": run(["git", "rev-parse", "HEAD"]).strip(),
-                     "trusted_ref": os.environ.get("GITHUB_REF", "local-owner"),
-                     "component_count": len(analysis["components"])}
+            if source_manifest() != source:
+                raise ValueError("Source changed during analysis; baseline was not promoted")
+            state = {"schema_version": 2, "settings_hash": ctx["settings_hash"],
+                     "repository_id": ctx["repository_id"], "source_hash": digest(source),
+                     "source_files": len(source), "commit": ctx["commit"],
+                     "trusted_ref": ctx["trusted_ref"],
+                     "component_count": len(analysis["components"]),
+                     "artifacts": baselines.artifact_hashes(output)}
             promote(output, baseline, state_path, state)
-            status = "passed"
+            baselines.checkpoint(ctx)
+            result.update(status="passed", phase="complete", reason="analysis_verified",
+                          component_count=state["component_count"], checkpoint_saved=True)
     finally:
-        report = {"mode": mode, "status": status, "provider": CONFIG["base_url"], "model": CONFIG["model"],
-                  "source_files": len(source), "source_hash": digest(source), "usage": ledger,
-                  "business_settings_changed": False}
-        write_changed(CACHE / "last-run.json", json_text(report))
-        print(json.dumps(report))
-        if status == "passed":
+        result["usage"] = ledger
+        if result["status"] == "passed":
             shutil.rmtree(attempt)
+
+
+def analyze(initialize=False, preflight_only=False):
+    os.umask(0o077)
+    ctx = baselines.context(ROOT, HERE)
+    baselines.prepare(ctx)
+    result = {"mode": "preflight" if preflight_only else ("full" if initialize else "incremental"),
+              "status": "blocked", "phase": "preflight", "reason": "preflight_not_completed",
+              "provider": CONFIG["base_url"], "model": CONFIG["model"],
+              "usage": {"requests": 0, "reserved_tokens": 0, "reported_tokens": 0, "usage_unknown": 0},
+              "business_settings_changed": False}
+    # A competing run must not overwrite the active run's status.
+    with baselines.locked(ctx):
+        try:
+            if not initialize:
+                result["baseline_restored"] = baselines.restore(ctx)
+            baselines.validate(ctx, initialize)
+            source = source_manifest()
+            result.update(source_files=len(source), source_hash=digest(source))
+            if preflight_only:
+                result.update(status="ready", reason="baseline_compatible")
+                return
+            result.update(status="failed", phase="analysis", reason="analysis_failed")
+            execute(source, ctx, result, initialize)
+        except baselines.BaselineError as error:
+            result["reason"] = error.code
+            raise
+        except (ValueError, OSError, subprocess.CalledProcessError):
+            if result["phase"] == "preflight":
+                result["reason"] = "source_preflight_failed"
+            raise
+        finally:
+            baselines.report(ctx, result)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--initialize", action="store_true", help="Explicit first full analysis (paid)")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--initialize", action="store_true", help="Explicit first full analysis (paid)")
+    group.add_argument("--preflight", action="store_true", help="Validate baseline without credentials or model calls")
+    group.add_argument("--cache-path", action="store_true", help="Prepare and print the private cache namespace")
     args = parser.parse_args()
-    analyze(args.initialize)
+    if args.cache_path:
+        print(baselines.prepare(baselines.context(ROOT, HERE)))
+    else:
+        analyze(args.initialize, args.preflight)
 
 
 if __name__ == "__main__":

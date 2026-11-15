@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"wangshangliao/internal/control"
+	"wangshangliao/internal/gateway"
 )
 
 type dashboardAccount struct {
@@ -63,32 +65,55 @@ type dashboardHealth struct {
 	Reasons []string `json:"reasons"`
 }
 
+type dashboardDecode struct {
+	Pending   int64               `json:"pending"`
+	Failed    int64               `json:"failed"`
+	Oldest    *time.Time          `json:"oldest_at"`
+	P95       *float64            `json:"p95_ms"`
+	Samples   int                 `json:"samples"`
+	SampledAt time.Time           `json:"sampled_at"`
+	Latency   latencyDistribution `json:"latency"`
+}
+
 type accountDashboard struct {
-	Account          dashboardAccount     `json:"account"`
-	SampledAt        time.Time            `json:"sampled_at"`
-	Visibility       string               `json:"visibility"`
-	Groups           dashboardGroups      `json:"groups"`
-	Operations       dashboardOperations  `json:"operations"`
-	Inbox            dashboardInbox       `json:"inbox"`
-	Performance      dashboardPerformance `json:"performance"`
-	Health           dashboardHealth      `json:"health"`
-	Backlog          dashboardHealth      `json:"backlog"`
-	BacklogThreshold int                  `json:"backlog_threshold_seconds"`
-	RuntimeObserved  bool                 `json:"runtime_observed"`
-	Receiver         *receiverView        `json:"receiver,omitempty"`
+	Account           dashboardAccount         `json:"account"`
+	SampledAt         time.Time                `json:"sampled_at"`
+	Visibility        string                   `json:"visibility"`
+	Groups            dashboardGroups          `json:"groups"`
+	Operations        dashboardOperations      `json:"operations"`
+	Inbox             dashboardInbox           `json:"inbox"`
+	Performance       dashboardPerformance     `json:"performance"`
+	Health            dashboardHealth          `json:"health"`
+	Backlog           dashboardHealth          `json:"backlog"`
+	BacklogThreshold  int                      `json:"backlog_threshold_seconds"`
+	RuntimeObserved   bool                     `json:"runtime_observed"`
+	Receiver          *receiverView            `json:"receiver,omitempty"`
+	Capacity          *control.AccountCapacity `json:"capacity,omitempty"`
+	HTTP              *gateway.ReadSnapshot    `json:"http,omitempty"`
+	Decode            *dashboardDecode         `json:"decode,omitempty"`
+	NativePerformance *dashboardPerformance    `json:"native_performance,omitempty"`
 }
 
 func (s *Server) accountDashboard(w http.ResponseWriter, r *http.Request, p Principal) error {
+	out, err := s.readAccountDashboard(r, p)
+	if err != nil {
+		return err
+	}
+	send(w, 200, out)
+	return nil
+}
+
+func (s *Server) readAccountDashboard(r *http.Request, p Principal) (accountDashboard, error) {
+	out := accountDashboard{Visibility: "account", BacklogThreshold: 30}
 	if p.Role != "superadmin" {
 		permissions, err := s.permissions(r.Context(), p)
 		if err != nil {
-			return err
+			return out, err
 		}
 		if !slices.Contains(permissions, "accounts:read") {
-			return fail(403, "permission_denied")
+			return out, fail(403, "permission_denied")
 		}
 	}
-	out := accountDashboard{Visibility: "account", BacklogThreshold: 30}
 	out.Performance.WindowSeconds = 60
 	out.Performance.Series = []dashboardBucket{}
 	// Business aggregates use the restricted tenant role and its forced RLS.
@@ -134,46 +159,73 @@ func (s *Server) accountDashboard(w http.ResponseWriter, r *http.Request, p Prin
 	if p.Role == "superadmin" {
 		tx, err := s.DB.Platform.BeginTx(r.Context(), pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 		if err != nil {
-			return err
+			return out, err
 		}
 		defer tx.Rollback(r.Context())
 		if err = read(tx); err != nil {
-			return err
+			return out, err
 		}
 		if err = s.readAccountIngress(r.Context(), tx, p, groupIDs, &out); err != nil {
-			return err
+			return out, err
 		}
 		if err = tx.Commit(r.Context()); err != nil {
-			return err
+			return out, err
 		}
 	} else {
 		out.Visibility = "tenant_groups"
 		if err := s.DB.TenantTx(r.Context(), p.TenantID, read); err != nil {
-			return err
+			return out, err
 		}
 		tx, err := s.DB.Platform.BeginTx(r.Context(), pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 		if err != nil {
-			return err
+			return out, err
 		}
 		defer tx.Rollback(r.Context())
 		if err = s.readAccountIngress(r.Context(), tx, p, groupIDs, &out); err != nil {
-			return err
+			return out, err
 		}
 		if err = tx.Commit(r.Context()); err != nil {
-			return err
+			return out, err
 		}
 	}
 	if p.Role == "superadmin" {
+		capacity, err := control.ReadAccountCapacity(r.Context(), s.DB.Platform, out.Account.ID)
+		if err != nil {
+			return out, err
+		}
+		out.Capacity = &capacity
+		view := gateway.ReadSnapshot{QueueCapacity: gateway.ReadQueueLimit}
+		if s.Receiver != nil {
+			view = s.Receiver.ReadSnapshot(out.Account.ID)
+		}
+		var cooldown *time.Time
+		if err = s.DB.Platform.QueryRow(r.Context(), `SELECT s.cooldown_until FROM accounts a
+            LEFT JOIN account_read_state s ON s.account_id=a.id AND s.account_epoch=a.epoch
+            WHERE a.id=$1`, out.Account.ID).Scan(&cooldown); err != nil {
+			return out, err
+		}
+		if cooldown != nil && (view.CooldownUntil == nil || cooldown.After(*view.CooldownUntil)) {
+			view.CooldownUntil = cooldown
+		}
+		out.HTTP = &view
+		monitor := s.monitorSnapshot(out.Account.Workspace)
+		for _, account := range monitor.Accounts {
+			if account.ID == out.Account.ID {
+				out.Decode = &dashboardDecode{Pending: account.DecodePending, Failed: account.DecodeFailed,
+					Oldest: account.DecodeOldest, P95: account.DecodeP95, Samples: account.DecodeSamples, SampledAt: account.SampledAt,
+					Latency: account.DecodeLatency}
+				out.Decode.Latency.Available = monitor.DatabaseAvailable && time.Since(account.SampledAt) < 45*time.Second
+				break
+			}
+		}
 		receiver, err := s.readReceiver(r, out.Account.ID)
 		if err != nil {
-			return err
+			return out, err
 		}
 		out.Receiver, out.RuntimeObserved = &receiver, receiver.Observed
 	}
 	out.Health, out.Backlog = classifyAccountDashboard(out)
-	w.Header().Set("Cache-Control", "no-store")
-	send(w, 200, out)
-	return nil
+	return out, nil
 }
 
 func (s *Server) readAccountIngress(ctx context.Context, tx pgx.Tx, p Principal, groups []string, out *accountDashboard) error {
@@ -226,6 +278,40 @@ func (s *Server) readAccountIngress(ctx context.Context, tx pgx.Tx, p Principal,
 		return err
 	}
 	out.Performance.PerSecond = float64(out.Performance.Inserted) / 60
+	if p.Role == "superadmin" {
+		native := &dashboardPerformance{WindowSeconds: 60, Series: []dashboardBucket{}}
+		err = tx.QueryRow(ctx, `SELECT count(*),max(received_at) FROM native_received_events
+            WHERE account_id=$1 AND kind IN('group','private') AND received_at>$2::timestamptz-interval '60 seconds'
+                AND received_at<=$2`, out.Account.ID, out.SampledAt).Scan(&native.Inserted, &native.LastInserted)
+		if err != nil {
+			return err
+		}
+		native.PerSecond = float64(native.Inserted) / 60
+		rows, queryErr := tx.Query(ctx, `WITH counts AS (
+            SELECT date_trunc('minute',received_at) at,count(*)::int total FROM native_received_events
+            WHERE account_id=$1 AND kind IN('group','private')
+                AND received_at>=date_trunc('minute',$2::timestamptz)-interval '14 minutes' AND received_at<=$2 GROUP BY 1)
+            SELECT at,coalesce(total,0) FROM generate_series(date_trunc('minute',$2::timestamptz)-interval '14 minutes',
+                date_trunc('minute',$2::timestamptz),interval '1 minute') buckets(at)
+            LEFT JOIN counts USING(at) ORDER BY at`, out.Account.ID, out.SampledAt)
+		if queryErr != nil {
+			return queryErr
+		}
+		for rows.Next() {
+			var bucket dashboardBucket
+			if err = rows.Scan(&bucket.At, &bucket.Count); err != nil {
+				rows.Close()
+				return err
+			}
+			native.Series = append(native.Series, bucket)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		out.NativePerformance = native
+	}
 	rows, err := tx.Query(ctx, `WITH counts AS (
         SELECT date_trunc('minute',persisted_at) AS at,count(*)::int AS total FROM inbox
         WHERE `+scope+` AND persisted_at >= date_trunc('minute',$5::timestamptz)-interval '14 minutes'
@@ -279,6 +365,9 @@ func classifyAccountDashboard(out accountDashboard) (dashboardHealth, dashboardH
 			health.Status = "unobserved"
 		case out.Receiver.Snapshot.State != "connected":
 			health.Status = "disconnected"
+		case out.Receiver.Snapshot.SyncedAt == nil:
+			health.Status = "unobserved"
+			health.Reasons = append(health.Reasons, "receiver_sync_pending")
 		case out.Receiver.Snapshot.HeartbeatAt == nil ||
 			out.SampledAt.Sub(*out.Receiver.Snapshot.HeartbeatAt) > 40*time.Second:
 			health.Status = "attention"

@@ -23,7 +23,7 @@ func TestPostgresGoConsole(t *testing.T) {
 		t.Fatal(err)
 	}
 	vault, _ := security.NewVault(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{21}, 32)))
-	s := New(db, vault, "http://127.0.0.1:5173", false)
+	s := newCaptchaTestServer(db, vault, "http://127.0.0.1:5173", false)
 	t.Cleanup(s.Native.Close)
 	server := httptest.NewServer(s.Handler())
 	t.Cleanup(server.Close)

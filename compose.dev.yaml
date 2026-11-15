@@ -1,0 +1,37 @@
+# Explicit development overlay; load after compose.local.yaml.
+# Frontend-only startup must use --no-deps to leave native connections alone.
+services:
+  web:
+    image: wsl-web:dev
+    build:
+      context: ./web
+      dockerfile: ../deploy/web.dev.Dockerfile
+    environment:
+      NODE_ENV: development
+      NODE_OPTIONS: --max-old-space-size=384
+      GOMEMLIMIT: 128MiB
+      GOMAXPROCS: "2"
+      WSL_DEV_PORT: ${WEB_PORT:-5173}
+      WSL_DEV_POLLING: ${WSL_DEV_POLLING:-false}
+    volumes:
+      - ./web/src/wsl:/workspace/web/src/wsl:ro
+      - ./web/src/components/core/charts/art-bar-chart:/workspace/web/src/components/core/charts/art-bar-chart:ro
+      - ./web/src/components/core/charts/art-ring-chart:/workspace/web/src/components/core/charts/art-ring-chart:ro
+      - ./web/src/components/core/charts/useChartSurface.ts:/workspace/web/src/components/core/charts/useChartSurface.ts:ro
+      - ./web/src/types/component/chart.ts:/workspace/web/src/types/component/chart.ts:ro
+      - ./web/src/assets:/workspace/web/src/assets:ro
+      - ./web/public:/workspace/web/public:ro
+      - ./web/index.html:/workspace/web/index.html:ro
+      - ./web/vite.dev.config.ts:/workspace/web/vite.dev.config.ts:ro
+      - web-dev-cache:/home/node/.cache/wsl-vite
+    cpus: 0.75
+    mem_limit: 512m
+    memswap_limit: 512m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
+      retries: 12
+volumes:
+  web-dev-cache:

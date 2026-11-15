@@ -58,7 +58,10 @@ func VerifyPassword(encoded, password string) bool {
 	return subtle.ConstantTimeCompare(key, expected) == 1
 }
 
-type Vault struct{ aead cipher.AEAD }
+type Vault struct {
+	aead           cipher.AEAD
+	fingerprintKey [32]byte
+}
 
 func NewVault(encoded string) (*Vault, error) {
 	key, err := base64.StdEncoding.DecodeString(encoded)
@@ -70,7 +73,7 @@ func NewVault(encoded string) (*Vault, error) {
 		return nil, err
 	}
 	aead, err := cipher.NewGCM(block)
-	return &Vault{aead: aead}, err
+	return &Vault{aead: aead, fingerprintKey: sha256.Sum256(append([]byte("request-fingerprint:"), key...))}, err
 }
 
 func (v *Vault) Seal(scope string, data []byte) ([]byte, error) {

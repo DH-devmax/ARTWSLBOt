@@ -28,7 +28,7 @@ func TestPostgresWorkspacesAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	vault, _ := security.NewVault(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{12}, 32)))
-	s := New(db, vault, "http://127.0.0.1:5173", false)
+	s := newCaptchaTestServer(db, vault, "http://127.0.0.1:5173", false)
 	t.Cleanup(s.Native.Close)
 	server := httptest.NewServer(s.Handler())
 	t.Cleanup(server.Close)
@@ -47,6 +47,7 @@ func TestPostgresWorkspacesAccess(t *testing.T) {
 		"username": "workspace-user", "password": "workspace-isolated-password-123", "tenant_name": "workspace-tenant",
 	}, 201)
 	tenantID := field(t, user, "tenant_id")
+	explicitTestCeiling(t, admin, tenantID)
 	var userID string
 	if err := db.Platform.QueryRow(ctx, `SELECT id::text FROM users WHERE username='workspace-user'`).Scan(&userID); err != nil {
 		t.Fatal(err)
@@ -67,8 +68,13 @@ func TestPostgresWorkspacesAccess(t *testing.T) {
 		for _, path := range []string{"/native-auth", "/forget-session"} {
 			expect(t, pair.client, "POST", "/accounts/"+pair.other+path, map[string]any{"version": 1}, 404)
 		}
+		expect(t, pair.client, "GET", "/accounts/"+pair.other+"/native-social", nil, 404)
+		expect(t, pair.client, "POST", "/accounts/"+pair.other+"/native-social-operations", map[string]any{}, 404)
 		expect(t, pair.client, "POST", "/native-signup", map[string]any{"account_id": pair.other, "version": 1}, 404)
 	}
+	expect(t, alice, "GET", "/accounts/"+primary+"/native-social", nil, 403)
+	expect(t, alice, "POST", "/accounts/"+primary+"/native-social-operations", map[string]any{}, 403)
+	expect(t, alice, "POST", "/accounts/"+primary+"/native-social-operations/"+primary+"/reconcile", map[string]any{}, 403)
 	if !bytes.Contains(expect(t, chat, "GET", "/workspaces", nil, 200), []byte(`"connection_lifecycle":"background"`)) {
 		t.Fatal("missing independent lifecycle contract")
 	}
@@ -109,6 +115,7 @@ func TestPostgresWorkspacesAccess(t *testing.T) {
 		}
 		groups = append(groups, id)
 	}
+	seedSyntheticGroupOwnership(t, db, vault, groups[0])
 	// A workspace switch is a read, never an epoch/connection mutation.
 	if _, err := db.Platform.Exec(ctx, `UPDATE accounts SET auth_state='authenticated' WHERE id=$1`, aiAccount); err != nil {
 		t.Fatal(err)
@@ -129,6 +136,8 @@ func TestPostgresWorkspacesAccess(t *testing.T) {
 		expect(t, admin, "PUT", path, map[string]any{
 			"role_code": "viewer", "permissions": rolePermissions("viewer"), "version": 0,
 		}, 200)
+		expect(t, alice, "GET", "/me", nil, 401)
+		alice = login("workspace-user")
 		expect(t, alice, "GET", "/groups", nil, 200)
 		expect(t, alice, "PATCH", "/groups/"+groups[0], map[string]any{"version": 1}, 403)
 		expect(t, alice, "PUT", "/groups/"+groups[0]+"/ai-service", map[string]any{"version": 1, "enabled": true}, 403)
@@ -138,6 +147,7 @@ func TestPostgresWorkspacesAccess(t *testing.T) {
 		expect(t, admin, "PUT", path, map[string]any{
 			"role_code": "manager", "permissions": rolePermissions("manager"), "version": 1,
 		}, 200)
+		alice = login("workspace-user")
 		var me struct {
 			Permissions []string `json:"permissions"`
 		}
@@ -156,6 +166,21 @@ func TestPostgresWorkspacesAccess(t *testing.T) {
 		}, 200)
 	})
 	t.Run("AI requests are quota checked and never run unverified actions", func(t *testing.T) {
+		// Assignment now requires actual trusted role/receiver evidence, rather
+		// than picking any existing chat account. These are isolated SQL fixtures.
+		if _, err := db.Platform.Exec(ctx, `UPDATE accounts SET auth_state='authenticated',credential_sealed='\x01' WHERE id=$1`, aiAccount); err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range groups {
+			if _, err := db.Platform.Exec(ctx, `INSERT INTO account_groups(account_id,group_id,role,observed_at,observation_source)
+                VALUES($1,$2,'member',now(),'native')`, aiAccount, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := db.Platform.Exec(ctx, `INSERT INTO account_receivers(account_id,enabled,observed_at,lease_until,snapshot)
+            VALUES($1,true,now(),now()+interval '1 minute',jsonb_build_object('state','connected','synced_at',now(),'heartbeat_at',now()))`, aiAccount); err != nil {
+			t.Fatal(err)
+		}
 		var wg sync.WaitGroup
 		statuses := make(chan int, 2)
 		for i, id := range groups {

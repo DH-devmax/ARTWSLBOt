@@ -65,7 +65,7 @@
     modelValue: boolean
     account: Row | null
     owner: string
-    workspace: 'wsl' | 'maibot'
+    workspace: import('./workspaces').Workspace
   }>()
   const emit = defineEmits<{
     'update:modelValue': [value: boolean]

@@ -3,6 +3,7 @@ package heatbot
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ type providerFunc func(context.Context, Request) (string, error)
 func (f providerFunc) Generate(ctx context.Context, r Request) (string, error) { return f(ctx, r) }
 
 func fixture(group string) Request {
-	return Request{ID: group, Scope: Scope{"tenant", group, "account"}, BindingVersion: 1,
+	return Request{ID: group, Scope: Scope{Platform: "wsl", TenantID: "tenant", GroupID: group, AccountID: "account"}, BindingVersion: 1,
 		AccountEpoch: 1, PersonaVersion: 1, Persona: "snapshot",
 		Messages: []Message{{"user", "isolated"}}, ExpiresAt: time.Now().Add(time.Minute)}
 }
@@ -118,6 +119,8 @@ func TestRejectScopeAndExpiredCandidate(t *testing.T) {
 	defer engine.Close()
 	for _, change := range []func(*Request){
 		func(r *Request) { r.Scope.TenantID = "" },
+		func(r *Request) { r.Scope.Platform = "" },
+		func(r *Request) { r.Scope.Platform = "unknown" },
 		func(r *Request) { r.Scope.AccountID = "" },
 		func(r *Request) { r.Scope.GroupID = "" },
 		func(r *Request) { r.PersonaVersion = 0 },
@@ -128,6 +131,47 @@ func TestRejectScopeAndExpiredCandidate(t *testing.T) {
 		change(&request)
 		if _, err := engine.Submit(context.Background(), request); err == nil {
 			t.Fatal("invalid snapshot accepted")
+		}
+	}
+}
+
+func TestThreeHundredGroupsAndPlatformIsolation(t *testing.T) {
+	entered := make(chan Request, 300)
+	release := make(chan struct{})
+	engine := New(providerFunc(func(ctx context.Context, r Request) (string, error) {
+		entered <- r
+		select {
+		case <-release:
+			return r.Scope.Platform, nil
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}))
+	defer engine.Close()
+	channels := make([]<-chan Result, 0, 300)
+	for i := range 300 {
+		// The same group ID in different platforms must not replace a candidate.
+		r := fixture(fmt.Sprint(i / 2))
+		if i%2 == 1 {
+			r.Scope.Platform = "lajiaoliao"
+		}
+		ch, err := engine.Submit(context.Background(), r)
+		if err != nil {
+			t.Fatalf("group %d rejected: %v", i, err)
+		}
+		channels = append(channels, ch)
+	}
+	for range 4 {
+		<-entered
+	}
+	if _, err := engine.Submit(context.Background(), fixture("301")); !errors.Is(err, ErrCapacity) {
+		t.Fatal("301st group admitted")
+	}
+	close(release)
+	for _, ch := range channels {
+		r := result(t, ch)
+		if r.Err != nil || r.Proposal.Text != r.Proposal.Scope.Platform {
+			t.Fatalf("scope/candidate lost: %#v", r)
 		}
 	}
 }

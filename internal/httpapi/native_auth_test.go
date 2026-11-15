@@ -60,7 +60,7 @@ func TestPostgresNativeAuth(t *testing.T) {
 		}
 	}
 	vault, _ := security.NewVault(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)))
-	s := New(db, vault, "http://127.0.0.1:5173", false)
+	s := newCaptchaTestServer(db, vault, "http://127.0.0.1:5173", false)
 	t.Cleanup(s.Native.Close)
 	server := httptest.NewServer(s.Handler())
 	t.Cleanup(server.Close)
@@ -79,24 +79,24 @@ func TestPostgresNativeAuth(t *testing.T) {
 	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
 	d := nativeauth.Deployment{Origin: "https://example.invalid", Headers: map[string]string{},
 		Metadata: make([]uint64, 14), SigningSeed: key, BodyKey: key, ServerKey: key,
-		CaptchaID: "synthetic-captcha", DeviceID: "synthetic-device", ProtocolVersion: "3.7.3"}
+		CaptchaID: "synthetic-captcha", DeviceID: "synthetic-device", ProtocolVersion: nativeauth.DesktopProtocolVersion}
 	encoded, _ := json.Marshal(d)
 	expect(t, admin, "PUT", "/native-deployment", map[string]any{"version": 0, "configuration": string(encoded)}, 200)
 	source := s.nativeRequestIDs(1)
-	first, err := source(ctx, true, uint64(time.Now().UnixMilli()))
+	first, err := source(ctx, uint64(time.Now().UnixNano()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	// New allocator, same timestamp and a backward clock must still preserve the durable high-water mark.
-	second, err := s.nativeRequestIDs(1)(ctx, true, first)
+	second, err := s.nativeRequestIDs(1)(ctx, first)
 	if err != nil || second != first+1 {
 		t.Fatal("request nonce was reused across allocator lifetimes", err)
 	}
-	third, err := source(ctx, true, 1)
+	third, err := source(ctx, 1)
 	if err != nil || third != second+1 {
 		t.Fatal("request nonce regressed after clock rollback", err)
 	}
-	if _, err = s.nativeRequestIDs(999)(ctx, true, third); err == nil {
+	if _, err = s.nativeRequestIDs(999)(ctx, third); err == nil {
 		t.Fatal("stale deployment allocated request nonce")
 	}
 	if _, err = db.Tenant.Exec(ctx, `SELECT sealed FROM native_deployment`); err == nil {
@@ -119,6 +119,7 @@ func TestPostgresNativeAuth(t *testing.T) {
 	tenant := login("native-tenant")
 	expect(t, tenant, "GET", "/native-deployment", nil, 403)
 	expect(t, tenant, "POST", "/native-signup", map[string]any{}, 403)
+	exerciseDeploymentCheck(t, s, admin, tenant)
 	newAccount := func(name string) string {
 		return field(t, expect(t, admin, "POST", "/accounts", map[string]string{"name": name}, 201), "id")
 	}

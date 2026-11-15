@@ -74,10 +74,19 @@ func (c *Client) Do(method, path string, body json.RawMessage) (json.RawMessage,
 }
 
 func (c *Client) DoOperation(body json.RawMessage, key string) (json.RawMessage, error) {
+	return c.doKeyed("/operations", body, key)
+}
+
+// DoTool uses the same website session and CSRF protection as the UI.
+func (c *Client) DoTool(body json.RawMessage, key string) (json.RawMessage, error) {
+	return c.doKeyed("/test-tools/call", body, key)
+}
+
+func (c *Client) doKeyed(path string, body json.RawMessage, key string) (json.RawMessage, error) {
 	if !json.Valid(body) || len(body) > 65536 || len(key) < 8 || len(key) > 100 || strings.ContainsAny(key, "\r\n") {
 		return nil, errors.New("valid JSON and an explicit stable idempotency key are required")
 	}
-	req, err := http.NewRequest(http.MethodPost, c.base.String()+"/api/v1/operations", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, c.base.String()+"/api/v1"+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -114,8 +123,15 @@ func (c *Client) request(req *http.Request) (json.RawMessage, error) {
 	return result.Data, nil
 }
 
-func (c *Client) Login(username, password string) error {
-	body, _ := json.Marshal(map[string]string{"username": username, "password": password})
+func (c *Client) Login(username, password string, ticket ...string) error {
+	if len(ticket) > 1 {
+		return errors.New("at most one captcha ticket is allowed")
+	}
+	in := map[string]string{"username": username, "password": password}
+	if len(ticket) == 1 {
+		in["captcha_ticket"] = ticket[0]
+	}
+	body, _ := json.Marshal(in)
 	_, err := c.Do(http.MethodPost, "/auth/login", body)
 	return err
 }

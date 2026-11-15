@@ -8,6 +8,7 @@
 bin/
 coverage.out
 node_modules/
+**/node_modules
 dist/
 .venv/
 __pycache__/
@@ -19,6 +20,8 @@ test-results/
 web/.env.local
 .playwright-cli/
 output/playwright/
+output/
+*.orig
 output/architecture/
 .codeboarding/*.json
 .codeboarding/*.pkl

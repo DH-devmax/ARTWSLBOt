@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "entries": [
+    {
+      "id": "tools.test_native_client_config.NativeClientConfigTests.test_pinned_artifact",
+      "fingerprint": "c7ce05db5b893e9f5f1a87b2a76e59b572f726eb947b406590ab25688c4b50f2",
+      "reason": "Optional pinned APK contract; synthetic protocol tests run without official client artifacts."
+    },
+    {
+      "id": "tools.test_native_mobile_search_config.NativeMobileSearchConfigTests.test_pinned_artifact_in_memory_only",
+      "fingerprint": "effe39df67a084dfcd42c64d65e26718e3f227297895113ef63e0ac4c0270be6",
+      "reason": "Optional pinned APK contract; synthetic protocol tests run without official client artifacts."
+    }
+  ]
+}

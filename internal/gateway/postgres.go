@@ -45,8 +45,8 @@ func (p *PostgresLedger) Commit(ctx context.Context, messages []Message) error {
 				p.mu.Unlock()
 			}
 			if group == "" {
-				err := tx.QueryRow(ctx, `INSERT INTO native_groups(native_id,name) VALUES($1,'待同步群资料')
-                    ON CONFLICT(native_id) DO UPDATE SET native_id=excluded.native_id RETURNING id::text`,
+				err := tx.QueryRow(ctx, `INSERT INTO native_groups(native_id,name,platform) VALUES($1,'待同步群资料','wsl')
+                    ON CONFLICT(platform,native_id) DO UPDATE SET native_id=excluded.native_id RETURNING id::text`,
 					m.NativeGroupID).Scan(&group)
 				if err != nil {
 					return err
@@ -62,8 +62,12 @@ func (p *PostgresLedger) Commit(ctx context.Context, messages []Message) error {
 		if m.Resolved {
 			state = "pending"
 		}
-		batch.Queue(`INSERT INTO inbox(account_id,group_id,native_message_id,sender_id,received_at,payload_sealed,state,binding_version)
-            VALUES($1,$2,$3,$4,$5,$6,$7,(SELECT version FROM group_bindings WHERE group_id=$2))
+		batch.Queue(`INSERT INTO inbox(account_id,group_id,native_message_id,sender_id,received_at,payload_sealed,state,binding_version,binding_epoch)
+            VALUES($1,$2,$3,$4,$5,$6,
+              CASE WHEN EXISTS(SELECT 1 FROM group_bindings WHERE group_id=$2 AND active AND primary_account_id=$1)
+                THEN $7 ELSE 'shadow' END,
+              (SELECT version FROM group_bindings WHERE group_id=$2),
+              (SELECT epoch FROM group_bindings WHERE group_id=$2))
             ON CONFLICT(account_id,group_id,native_message_id) DO NOTHING`,
 			m.AccountID, group, m.NativeID, m.SenderID, m.ReceivedAt, sealed, state)
 	}
