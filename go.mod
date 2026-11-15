@@ -17,7 +17,7 @@ require (
 	github.com/tklauser/go-sysconf v0.4.0
 	github.com/wenlng/go-captcha-assets v1.0.7
 	github.com/wenlng/go-captcha/v2 v2.0.5
-	github.com/zeebo/xxh3 v1.0.2
+	github.com/zeebo/xxh3 v1.1.0
 	golang.org/x/crypto v0.59.0
 	golang.org/x/image v0.45.0
 	golang.org/x/sys v0.50.0
@@ -41,7 +41,7 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/cpuid/v2 v2.2.9 // indirect
+	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
