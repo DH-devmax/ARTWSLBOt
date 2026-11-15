@@ -268,6 +268,7 @@ async (page) => {
   }
   const dialog = name => page.getByRole('dialog', { name, exact: true })
   const writeCount = path => writes.filter(w => w.path === path).length
+  let navigationSerial = 0
   const navigate = async (key, workspace = 'wsl') => {
     await page.goto(base)
     await page.evaluate(({ actor, workspace, admin }) => {
@@ -275,7 +276,7 @@ async (page) => {
       sessionStorage.setItem(`wsl:workspace:${actor}`, workspace)
       sessionStorage.setItem(`wsl:console:${actor}`, admin ? 'admin' : 'user')
     }, { actor: me().id, workspace, admin: mode === 'admin' })
-    await page.goto(`${base}/#${key}`); await page.reload()
+    await page.goto(`${base}/?synthetic-navigation=${++navigationSerial}#${key}`)
     await page.locator('.platform-shell').waitFor()
   }
   const choose = async (select, label) => {

@@ -5,6 +5,7 @@ import ast
 import hashlib
 import importlib
 from pathlib import Path
+import subprocess
 import sys
 import time
 import unittest
@@ -113,16 +114,23 @@ def python_checks(entries):
     return [*result.cases, *errors]
 
 
-def node_results(entry, text, returncode, root=ROOT):
+def node_results(entry, text, returncode, root=ROOT, *, invoked_file=None):
     document = ElementTree.fromstring(text)
     if document.tag != "testsuites":
         raise ValueError("Unexpected Node result format")
+    expected_file = (root / entry).resolve()
+    if invoked_file is not None:
+        invoked_file = Path(invoked_file)
+        if not invoked_file.is_absolute() or invoked_file.resolve() != expected_file:
+            raise ValueError("Mismatched Node invocation source")
     cases, seen = [], set()
     for test in document.iter("testcase"):
         name, classname = test.get("name"), test.get("classname")
-        filename = Path(test.get("file", ""))
+        # Node 22 omits file; only the runner's explicit single-file invocation
+        # may supply it. A reported file, even an empty one, must still validate.
+        filename = Path(test.get("file", str(invoked_file) if invoked_file else ""))
         if (not name or not classname or not filename.is_absolute()
-                or filename.resolve() != (root / entry).resolve()):
+                or filename.resolve() != expected_file):
             raise ValueError("Missing Node case source")
         identifier = entry + ":" + classname + "/" + name
         if identifier in seen:
@@ -139,21 +147,32 @@ def node_results(entry, text, returncode, root=ROOT):
     return cases
 
 
-def node_checks(entries):
+def node_checks(entries, root=ROOT):
+    root = Path(root).resolve()
     cases = []
     for entry in entries:
         started = time.monotonic()
         try:
             completed = run(
                 ["node", "--experimental-transform-types", "--experimental-vm-modules",
-                 "--test", "--test-reporter=junit", entry], timeout=300,
+                 "--test", "--test-reporter=junit", entry], timeout=300, cwd=root,
             )
-            results = node_results(entry, completed.stdout, completed.returncode)
-            for case in results:
-                case["duration_seconds"] = round(time.monotonic() - started, 3)
-            cases.extend(results)
+        except subprocess.TimeoutExpired:
+            results = [{"id": entry, "status": "failed", "code": "child_timeout"}]
+        except OSError:
+            results = [{"id": entry, "status": "failed", "code": "child_start_failed"}]
         except Exception:
-            cases.append({"id": entry, "status": "failed", "code": "child_timeout_or_error"})
+            results = [{"id": entry, "status": "failed", "code": "child_execution_error"}]
+        else:
+            try:
+                results = node_results(entry, completed.stdout, completed.returncode,
+                                       root, invoked_file=root / entry)
+            except (ValueError, ElementTree.ParseError):
+                results = [{"id": entry, "status": "failed", "code": "invalid_node_report",
+                            "returncode": completed.returncode}]
+        for case in results:
+            case["duration_seconds"] = round(time.monotonic() - started, 3)
+        cases.extend(results)
     return cases
 
 

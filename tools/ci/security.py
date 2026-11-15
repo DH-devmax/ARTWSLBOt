@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -10,6 +11,18 @@ try:
     from .common import ROOT, load_json, report, run, write_json
 except ImportError:
     from common import ROOT, load_json, report, run, write_json
+
+
+CODEQL_LANGUAGES = ("go", "javascript")
+
+
+class CodeQLStageError(ValueError):
+    def __init__(self, language, stage):
+        if language not in CODEQL_LANGUAGES or stage not in ("extract", "analyze"):
+            raise ValueError("Invalid CodeQL failure stage")
+        super().__init__("CodeQL stage failed")
+        self.language = language
+        self.stage = stage
 
 
 def stream(text):
@@ -77,8 +90,43 @@ def vulnerabilities(values, returncode):
     return sorted(set(findings))
 
 
+def scan_codeql(executable, database_root, output):
+    specification = load_json(ROOT / "tools/ci/toolchain.json")["tools"]["codeql"]
+    version = run([str(executable), "version", "--format=json"], timeout=60)
+    values = stream(version.stdout)
+    if (version.returncode or len(values) != 1
+            or values[0].get("version") != specification["version"]):
+        raise ValueError("Unexpected CodeQL CLI version")
+    if any(output.glob("*.sarif")):
+        raise ValueError("CodeQL output must be fresh")
+    database_root.mkdir(parents=True, exist_ok=False)
+    environment = {**os.environ, "CGO_ENABLED": "1", "GOFLAGS": "-mod=readonly"}
+    for language in CODEQL_LANGUAGES:
+        database = database_root / language
+        create = [str(executable), "database", "create", str(database),
+                  f"--language={language}", f"--source-root={ROOT}",
+                  f"--codescanning-config={ROOT / '.github/codeql.yml'}"]
+        if language == "go":
+            create += ["--build-mode=manual",
+                       "--command=go build -a -tags sodium ./cmd/... ./internal/... ./tools/..."]
+        else:
+            create += ["--build-mode=none"]
+        analyze = [str(executable), "database", "analyze", str(database),
+                   "--format=sarifv2.1.0", f"--output={output / (language + '.sarif')}",
+                   f"--sarif-category=security/{language}",
+                   "--sarif-include-diagnostics", "--threads=0"]
+        for stage, command in (("extract", create), ("analyze", analyze)):
+            try:
+                result = run(command, env=environment, timeout=900)
+            except Exception:
+                raise CodeQLStageError(language, stage) from None
+            if result.returncode:
+                raise CodeQLStageError(language, stage)
+
+
 def codeql_findings(paths):
-    if len(paths) != 2 or {path.stem for path in paths} != {"go", "javascript"}:
+    if len(paths) != 2 or {path.name for path in paths} != {
+            f"{language}.sarif" for language in CODEQL_LANGUAGES}:
         raise ValueError("Missing CodeQL language result")
     found = []
     for path in paths:
@@ -89,6 +137,9 @@ def codeql_findings(paths):
             driver = result.get("tool", {}).get("driver", {})
             if driver.get("name") != "CodeQL" or driver.get("version") != "2.27.4":
                 raise ValueError("Unexpected CodeQL extractor version")
+            category = result.get("automationDetails", {}).get("id", "")
+            if not isinstance(category, str) or category.rstrip("/") != f"security/{path.stem}":
+                raise ValueError("CodeQL language result does not match its category")
             invocations = result.get("invocations")
             if not isinstance(invocations, list) or not invocations:
                 raise ValueError("Missing CodeQL completion evidence")
@@ -112,7 +163,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("scanner", choices=("govulncheck", "codeql"))
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--codeql", type=Path)
+    parser.add_argument("--database-root", type=Path)
     options = parser.parse_args()
+    if bool(options.codeql) != bool(options.database_root) or (
+            options.codeql and options.scanner != "codeql"):
+        parser.error("--codeql and --database-root must be used together for CodeQL")
     options.output.mkdir(parents=True, exist_ok=True)
     try:
         if options.scanner == "govulncheck":
@@ -124,15 +180,25 @@ def main():
             findings = vulnerabilities(values, result.returncode)
             write_json(options.output / "scanner.json", values)
         else:
+            if options.codeql:
+                scan_codeql(options.codeql.resolve(), options.database_root.resolve(),
+                            options.output.resolve())
             findings = codeql_findings(list(options.output.glob("*.sarif")))
         cases = [{"id": options.scanner, "status": "failed" if findings else "passed",
                   "code": "new_security_findings" if findings else "ok",
                   "findings": findings}]
+    except CodeQLStageError as failure:
+        cases = [{"id": options.scanner, "status": "failed",
+                  "code": f"codeql_{failure.stage}_failed",
+                  "language": failure.language, "stage": failure.stage}]
     except Exception:
         cases = [{"id": options.scanner, "status": "failed", "code": "scanner_or_extraction_failed"}]
     value = report("security/" + options.scanner, cases)
     write_json(options.output / "report.json", value)
-    print(json.dumps({"scanner": options.scanner, "status": value["status"], "counts": value["counts"]}))
+    summary = {"scanner": options.scanner, "status": value["status"], "counts": value["counts"]}
+    if "stage" in cases[0]:
+        summary.update({key: cases[0][key] for key in ("code", "language", "stage")})
+    print(json.dumps(summary))
     return int(value["status"] != "passed")
 
 

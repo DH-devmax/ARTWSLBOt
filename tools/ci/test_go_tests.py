@@ -3,6 +3,7 @@
 import importlib.util
 import io
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -452,17 +453,35 @@ class RunnerExecutionTests(unittest.TestCase):
         self.calls.append((list(command), dict(environment)))
         names = list(self.packages) if command[-1] == "./tools/..." else [
             "example/" + command[-1].removeprefix("./")]
+        expression = next((value.removeprefix("-run=") for value in command
+                           if value.startswith("-run=")), None)
         events = []
+        counts = {}
         for name in names:
-            events.extend([event("start", package=name), event("run", "TestA", package=name),
-                           event("output", "TestA", package=name, Output="SECRET MUST NOT ESCAPE"),
-                           event("pass", "TestA", package=name), event("pass", package=name)])
+            events.append(event("start", package=name))
+            parents = [test for package, test in self.expected if package == name
+                       and (expression is None or re.search(expression, test))]
+            counts[name] = len(parents)
+            for test in parents:
+                events.extend([event("run", test, package=name),
+                               event("output", test, package=name, Output="SECRET MUST NOT ESCAPE")])
+                if test.startswith("Fuzz"):
+                    events.extend([event("run", test + "/seed#0", package=name),
+                                   event("pass", test + "/seed#0", package=name)])
+                events.append(event("pass", test, package=name))
+            events.append(event("pass", package=name))
         path = Path(next(value.split("=", 1)[1] for value in command
                          if value.startswith("-coverprofile=")))
-        path.write_text("mode: atomic\n" + "".join(name + "/a.go:1.1,2.1 1 1\n" for name in names))
+        path.write_text("mode: atomic\n" + "".join(
+            name + f"/a.go:1.1,2.1 1 {counts[name]}\n" for name in names))
         return subprocess.CompletedProcess(command, 0, "\n".join(json.dumps(e) for e in events))
 
-    def run_fixture(self, profile, side_effect=None):
+    def set_parents(self, package, names):
+        source = next(source for key, source in self.expected.items() if key[0] == package)
+        self.expected = {key: value for key, value in self.expected.items() if key[0] != package}
+        self.expected.update({(package, name): source for name in names})
+
+    def run_fixture(self, profile, side_effect=None, output="output"):
         with patch.object(runner, "source_sha", return_value=SHA), \
                 patch.object(runner, "toolchain", return_value=TOOLCHAIN), \
                 patch.object(runner, "discover",
@@ -470,7 +489,7 @@ class RunnerExecutionTests(unittest.TestCase):
                 patch.object(runner, "discover_packages",
                              return_value=(self.packages, self.snapshot)), \
                 patch.object(runner, "capture", side_effect=side_effect or self.fake_capture):
-            return runner.run_profile(profile, self.root / "output", self.root, environment={})
+            return runner.run_profile(profile, self.root / output, self.root, environment={})
 
     def test_unit_executes_all_once_and_delivers_validated_artifacts(self):
         report = self.run_fixture("unit")
@@ -480,6 +499,9 @@ class RunnerExecutionTests(unittest.TestCase):
         command, env = self.calls[0]
         for flag in ("-race", "-count=1", "-json", "-covermode=atomic"):
             self.assertIn(flag, command)
+        self.assertFalse(any(value.startswith("-run=") for value in command))
+        self.assertNotIn("-p=1", command)
+        self.assertNotIn("-parallel=1", command)
         self.assertEqual(command[-3:], list(runner.OWNED_ROOTS))
         self.assertNotIn("./...", command)
         self.assertEqual(env["WSL_INTEGRATION"], "0")
@@ -500,6 +522,201 @@ class RunnerExecutionTests(unittest.TestCase):
             self.assertEqual(environment["WSL_INTEGRATION"], "0" if relative.endswith("gateway") else "1")
             self.assertEqual(environment["WSL_GATEWAY_INTEGRATION"], "1" if relative.endswith("gateway") else "0")
         self.assertEqual(len(coverage.load_bundle(self.root / "output", self.root)), 3)
+
+    def test_database_batches_sort_and_cover_every_parent_once_with_package_artifacts(self):
+        parents = [
+            ["ExampleA", "FuzzA", "TestA", "TestAB"] + [f"Test{i:03d}" for i in range(61)],
+            [f"Test{i:03d}" for i in range(33)],
+            [f"Test{i:03d}" for i in range(32)],
+        ]
+        for package, names in zip(self.packages, parents):
+            self.set_parents(package, reversed(names))
+        report = self.run_fixture("database")
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(report["counts"]["expected"], 130)
+        self.assertEqual(report["counts"]["passed"], 130)
+        self.assertEqual(report["counts"]["missing"], 0)
+        self.assertEqual(report["counts"]["children"], 1)
+        self.assertEqual(len(self.calls), 6)
+        self.assertEqual(len(report["runs"]), 6)
+        self.assertEqual({(case["package"], case["name"]) for case in report["cases"]},
+                         set(self.expected))
+        self.assertEqual(report["inventory"], [
+            {"package": key[0], "name": key[1], "source": source}
+            for key, source in sorted(self.expected.items())])
+        plan = [(relative, sorted(names)[start:start + 32])
+                for relative, names in zip(runner.DB_PACKAGES, parents)
+                for start in range(0, len(names), 32)]
+        for (command, environment), run, (relative, names) in zip(
+                self.calls, report["runs"], plan):
+            self.assertEqual(command[-1], "./" + relative)
+            for flag in ("-race", "-count=1", "-json", "-covermode=atomic",
+                         "-p=1", "-parallel=1", "-timeout=15m"):
+                self.assertIn(flag, command)
+            self.assertEqual(command[command.index("-tags") + 1], "sodium")
+            expression = next(value.removeprefix("-run=") for value in command
+                              if value.startswith("-run="))
+            self.assertEqual(expression, "^(" + "|".join(names) + ")$")
+            for name in names:
+                self.assertIsNotNone(re.search(expression, name))
+                self.assertIsNone(re.search(expression, "Prefix" + name))
+                self.assertIsNone(re.search(expression, name + "Suffix"))
+            self.assertEqual([case["name"] for case in run["cases"]], names)
+            gateway = relative.endswith("gateway")
+            self.assertEqual(environment["WSL_INTEGRATION"], "0" if gateway else "1")
+            self.assertEqual(environment["WSL_GATEWAY_INTEGRATION"], "1" if gateway else "0")
+        self.assertEqual([item["file"] for item in report["coverage"]], [
+            "database-control.cover", "database-httpapi.cover", "database-gateway.cover"])
+        bundle = coverage.load_bundle(self.root / "output", self.root)
+        self.assertEqual(len(bundle), 3)
+        for (meta, blocks), names in zip(bundle, parents):
+            self.assertEqual([block.count for block in blocks.values()], [len(names)])
+            self.assertEqual(meta["sha"], SHA)
+            self.assertEqual(meta["toolchain"], TOOLCHAIN)
+            self.assertEqual(meta["source_files"], self.snapshot)
+        self.assertNotIn("SECRET", json.dumps(report))
+        self.assertEqual(self.run_fixture("unit", output="unit")["status"], "passed")
+        summary = coverage.merge_directories(
+            [self.root / "unit", self.root / "output"], self.root / "merged", self.root)
+        self.assertEqual(summary["status"], "passed")
+        self.assertEqual(len(summary["scopes"]), 4)
+        merged = coverage.parse_profile((self.root / "merged/merged.cover").read_text())
+        self.assertEqual({block.file: block.count for block in merged.values()}, {
+            package + "/a.go": 2 * len(names)
+            for package, names in zip(self.packages, parents)})
+
+    def test_unit_does_not_batch_large_inventories(self):
+        self.set_parents(PACKAGE, [f"Test{i:03d}" for i in range(65)])
+        report = self.run_fixture("unit")
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(report["counts"]["passed"], 67)
+        self.assertEqual(len(self.calls), 1)
+        self.assertFalse(any(value.startswith("-run=") for value in self.calls[0][0]))
+        self.assertEqual([item["file"] for item in report["coverage"]], ["unit.cover"])
+        self.assertEqual(len(coverage.load_bundle(self.root / "output", self.root)), 1)
+
+    def test_failed_batch_stops_before_later_batches_and_packages(self):
+        self.set_parents(PACKAGE, [f"Test{i:03d}" for i in range(65)])
+
+        def fail(command, root, environment, timeout=1800):
+            result = self.fake_capture(command, root, environment, timeout)
+            if len(self.calls) != 2:
+                return result
+            events = list(runner.json_objects(result.stdout))
+            for item in events:
+                if item["Action"] == "pass" and item.get("Test") in ("Test032", None):
+                    item["Action"] = "fail"
+            return subprocess.CompletedProcess(command, 1, "\n".join(json.dumps(e) for e in events))
+
+        report = self.run_fixture("database", fail)
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(report["counts"]["expected"], 67)
+        self.assertEqual(report["counts"]["failed"], 1)
+        self.assertEqual(report["counts"]["missing"], 3)
+        self.assertEqual(report["coverage"], [])
+        self.assertFalse((self.root / "output/database-control.cover").exists())
+
+    def test_incomplete_batch_cannot_pass_with_a_zero_exit_code(self):
+        self.set_parents(PACKAGE, [f"Test{i:03d}" for i in range(33)])
+
+        def omit_parent(command, root, environment, timeout=1800):
+            result = self.fake_capture(command, root, environment, timeout)
+            if len(self.calls) != 2:
+                return result
+            events = [item for item in runner.json_objects(result.stdout)
+                      if item.get("Test") != "Test032"]
+            return subprocess.CompletedProcess(command, 0, "\n".join(json.dumps(e) for e in events))
+
+        report = self.run_fixture("database", omit_parent)
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(len(self.calls), 2)
+        self.assertIn("missing_parent", report["errors"])
+        self.assertEqual(report["counts"]["expected"], 35)
+        self.assertEqual(report["counts"]["missing"], 3)
+        self.assertEqual(report["coverage"], [])
+
+    def test_database_fixture_change_between_batches_stops_before_the_next_command(self):
+        self.set_parents(PACKAGE, [f"Test{i:03d}" for i in range(33)])
+
+        def change_fixture(command, root, environment, timeout=1800):
+            result = self.fake_capture(command, root, environment, timeout)
+            with (self.root / ".env").open("a") as handle:
+                handle.write("# synthetic fixture changed\n")
+            return result
+
+        report = self.run_fixture("database", change_fixture)
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(len(self.calls), 1)
+        self.assertIn("runner_validation_failed", report["errors"])
+        self.assertEqual(report["counts"]["expected"], 35)
+        self.assertEqual(report["counts"]["missing"], 3)
+        self.assertEqual(report["coverage"], [])
+
+    def test_batch_timeout_retains_full_inventory_and_safe_unfinished_records(self):
+        self.set_parents(PACKAGE, [f"Test{i:03d}" for i in range(65)])
+
+        def timeout(command, root, environment, timeout=1800):
+            result = self.fake_capture(command, root, environment, timeout)
+            if len(self.calls) != 2:
+                return result
+            events = [event("start"), event("run", "Test032"),
+                      event("run", "Test032/child"),
+                      event("output", Output="panic: test timed out after 15m0s\nSECRET PAYLOAD"),
+                      event("fail")]
+            return subprocess.CompletedProcess(command, 1, "\n".join(json.dumps(e) for e in events))
+
+        report = self.run_fixture("database", timeout)
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(report["counts"]["expected"], 67)
+        self.assertEqual(report["counts"]["passed"], 32)
+        self.assertEqual(report["counts"]["missing"], 35)
+        started = [case["name"] for case in report["cases"] if case.get("started")]
+        self.assertEqual(started, ["Test032"])
+        self.assertEqual(report["runs"][1]["diagnostics"], ["package_timeout"])
+        self.assertEqual(report["runs"][1]["unfinished"], [
+            {"package": PACKAGE, "name": "Test032"},
+            {"package": PACKAGE, "name": "Test032/child"},
+        ])
+        self.assertEqual(report["coverage"], [])
+        self.assertNotIn("SECRET", json.dumps(report))
+
+    def test_database_batch_coverage_layout_change_fails_closed(self):
+        self.set_parents(PACKAGE, [f"Test{i:03d}" for i in range(33)])
+
+        def change_layout(command, root, environment, timeout=1800):
+            result = self.fake_capture(command, root, environment, timeout)
+            if len(self.calls) == 2:
+                path = Path(next(value.split("=", 1)[1] for value in command
+                                 if value.startswith("-coverprofile=")))
+                path.write_text(path.read_text().replace("1.1,2.1", "1.1,3.1"))
+            return result
+
+        report = self.run_fixture("database", change_layout)
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(len(self.calls), 2)
+        self.assertIn("runner_validation_failed", report["errors"])
+        self.assertEqual(report["coverage"], [])
+        with self.assertRaises(coverage.CoverageError):
+            coverage.load_bundle(self.root / "output", self.root)
+
+    def test_database_batch_coverage_provenance_change_fails_closed(self):
+        self.set_parents(PACKAGE, [f"Test{i:03d}" for i in range(33)])
+        original = runner.coverage_metadata
+
+        def change_provenance(root, path, *args):
+            meta = original(root, path, *args)
+            if path.name.endswith("-batch-002.cover"):
+                meta["toolchain"] = dict(TOOLCHAIN, GOVERSION="go1.28.0")
+            return meta
+
+        with patch.object(runner, "coverage_metadata", side_effect=change_provenance):
+            report = self.run_fixture("database")
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(len(self.calls), 2)
+        self.assertIn("runner_validation_failed", report["errors"])
+        self.assertEqual(report["coverage"], [])
 
     def test_database_failure_stops_before_later_package(self):
         def fail(command, root, environment, timeout=1800):

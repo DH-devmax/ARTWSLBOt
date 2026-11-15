@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[2]
 TAGS = ["sodium"]
 OWNED_ROOTS = ("./cmd/...", "./internal/...", "./tools/...")
 DB_PACKAGES = ("internal/control", "internal/httpapi", "internal/gateway")
+DB_BATCH_SIZE = 32
 DB_KEYS = ("DATABASE_URL", "TENANT_DATABASE_URL", "MIGRATION_DATABASE_URL")
 OPT_INS = ("WSL_REPLAY", "WSL_MONITOR_REPLAY", "WSL_CACHE_DB_BENCH",
            "WSL_CACHE_BENCH", "WSL_CACHE_SOAK", "WSL_CUSTOMER_CLOSED_PERFORMANCE",
@@ -570,37 +571,55 @@ def run_profile(profile, output, root=ROOT, skip_policy=None, sha=None, environm
             require(bool(current), "required database package absent")
             selected_expected = {key: value for key, value in expected.items() if key[0] in current}
             require(bool(selected_expected), "executed scope has no parent tests")
-            collector = Inventory(selected_expected, current, policy, profile)
             relative = str(Path(next(iter(current.values()))["Dir"]).resolve().relative_to(root))
             run_env = build_environment(environment, profile, relative)
+            batches = [selected_expected]
             if profile == "database":
-                require(validate_database(root, environment) == fixture,
-                        "database fixture changed during run")
-            path = output / (name + ".cover")
-            command = ["go", "test", "-race", "-tags", "sodium", "-count=1", "-json",
-                       "-covermode=atomic", "-coverprofile=" + str(path), "-timeout=15m"]
-            if profile == "database":
-                command += ["-p=1", "-parallel=1"]
-            result = capture(command + patterns, root, run_env)
-            try:
-                for event in json_objects(result.stdout):
-                    collector.consume(event)
-            except RunnerError:
-                collector.problem("invalid_go_test_json")
-            run = collector.finish(result.returncode)
-            run.update({"name": name, "packages": sorted(current)})
-            report["runs"].append(run)
-            report["cases"].extend(run["cases"])
-            report["children"].extend(run["children"])
-            report["errors"].extend(run["errors"])
-            if run["status"] == "passed":
+                keys = sorted(selected_expected)
+                batches = [{key: selected_expected[key] for key in keys[start:start + DB_BATCH_SIZE]}
+                           for start in range(0, len(keys), DB_BATCH_SIZE)]
+            profiles = []
+            for index, batch in enumerate(batches, 1):
+                collector = Inventory(batch, current, policy, profile)
+                run_name = name if profile == "unit" else f"{name}-batch-{index:03d}"
+                if profile == "database":
+                    require(validate_database(root, environment) == fixture,
+                            "database fixture changed during run")
+                path = output / (run_name + ".cover")
+                command = ["go", "test", "-race", "-tags", "sodium", "-count=1", "-json",
+                           "-covermode=atomic", "-coverprofile=" + str(path), "-timeout=15m"]
+                if profile == "database":
+                    expression = "^(" + "|".join(re.escape(key[1]) for key in batch) + ")$"
+                    command += ["-p=1", "-parallel=1", "-run=" + expression]
+                result = capture(command + patterns, root, run_env)
+                try:
+                    for event in json_objects(result.stdout):
+                        collector.consume(event)
+                except RunnerError:
+                    collector.problem("invalid_go_test_json")
+                run = collector.finish(result.returncode)
+                run.update({"name": run_name, "packages": sorted(current)})
+                report["runs"].append(run)
+                report["cases"].extend(run["cases"])
+                report["children"].extend(run["children"])
+                report["errors"].extend(run["errors"])
+                if run["status"] != "passed":
+                    break
                 meta = coverage_metadata(root, path, current, snapshot, identity, profile, module)
-                sidecar = Path(str(path) + ".meta.json")
-                coverage.write_json(sidecar, meta)
-                report["coverage"].append({"file": path.name, "metadata": sidecar.name})
+                if profile == "database":
+                    profiles.append((meta, coverage.parse_profile(path.read_text(encoding="utf-8"))))
             # A failing/resetting suite must not feed a later database suite.
             if run["status"] != "passed":
                 break
+            if profile == "database":
+                # Preserve one validated artifact per package for the coverage consumer.
+                _, blocks, _, _ = coverage.merge_profiles(profiles)
+                path = output / (name + ".cover")
+                path.write_text(coverage.profile_text(blocks), encoding="utf-8")
+                meta = coverage_metadata(root, path, current, snapshot, identity, profile, module)
+            sidecar = Path(str(path) + ".meta.json")
+            coverage.write_json(sidecar, meta)
+            report["coverage"].append({"file": path.name, "metadata": sidecar.name})
         for name, digest in snapshot.items():
             require(coverage.file_hash(coverage.inside(root, name)) == digest,
                     "source changed during test run")
