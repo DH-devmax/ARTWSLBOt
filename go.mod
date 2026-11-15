@@ -10,7 +10,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/klauspost/compress v1.20.3
-	github.com/openimsdk/protocol v0.0.73-alpha.17
+	github.com/openimsdk/protocol v0.0.73-alpha.20
 	github.com/pierrec/lz4/v4 v4.1.22
 	github.com/shirou/gopsutil/v4 v4.26.9
 	github.com/spaolacci/murmur3 v1.1.0
