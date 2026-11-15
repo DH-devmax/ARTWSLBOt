@@ -109,12 +109,16 @@ def create_session():
                       f"WSL_SMOKE_SESSION_USER_ID={identifier}\n")
         docker("run", "--rm", "--network", "wsl-platform_default", "--read-only",
                "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
-               "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=256m",
+               "--user", f"{os.getuid()}:{os.getgid()}",
+               "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=512m",
                "--env-file", str(environment), "-e", "GOCACHE=/tmp/go-build",
+               "-e", "CGO_ENABLED=0", "-e", "GOTOOLCHAIN=local",
+               "-e", "GOPROXY=off", "-e", "GOSUMDB=off",
+               "-e", "GOMODCACHE=/go/pkg/mod",
                "-v", f"{ROOT}:/src:ro", "-v", f"{output.parent}:/smoke-output",
                "wsl-test:ci", "run", "-mod=readonly", "./tools/smoke_session",
                "/smoke-output/" + output.name)
-    if stat.S_IMODE(output.stat().st_mode) != 0o600:
+    if stat.S_IMODE(output.stat().st_mode) != 0o600 or output.stat().st_uid != os.getuid():
         raise RuntimeError("CI session output is not private")
     session = json.loads(output.read_text())
     if session["username"] != "synthetic-smoke-admin" or session["user_id"] != identifier:

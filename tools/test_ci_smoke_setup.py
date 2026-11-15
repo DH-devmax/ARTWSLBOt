@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import shlex
 import tempfile
@@ -152,6 +153,41 @@ class CISetupTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     SETUP.isolate_fixture_database(path)
             self.assertEqual(path.read_text(), body)
+
+    def test_session_helper_keeps_private_output_owned_by_the_runner(self):
+        identifier = "b7000000-0000-4000-8000-000000000001"
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "var").mkdir()
+            SETUP.private_write(root / ".env",
+                                "DATABASE_URL=postgres://wsl_platform:synthetic@127.0.0.1/"
+                                "wsl_test?sslmode=disable\n")
+            calls = []
+
+            def docker(*arguments):
+                calls.append(arguments)
+                if arguments[0] == "exec":
+                    return identifier
+                self.assertEqual(arguments[arguments.index("--user") + 1],
+                                 f"{os.getuid()}:{os.getgid()}")
+                self.assertEqual(arguments[arguments.index("--tmpfs") + 1],
+                                 "/tmp:rw,exec,nosuid,nodev,size=512m")
+                for setting in ("GOCACHE=/tmp/go-build", "CGO_ENABLED=0",
+                                "GOTOOLCHAIN=local", "GOPROXY=off", "GOSUMDB=off",
+                                "GOMODCACHE=/go/pkg/mod"):
+                    self.assertIn(setting, arguments)
+                environment = Path(arguments[arguments.index("--env-file") + 1])
+                self.assertEqual(environment.stat().st_mode & 0o777, 0o600)
+                SETUP.private_write(root / "var/ci-website-session.json", json.dumps({
+                    "username": "synthetic-smoke-admin", "user_id": identifier}))
+                return ""
+
+            with patch.object(SETUP, "ROOT", root), patch.object(SETUP, "docker", docker):
+                SETUP.create_session()
+            self.assertEqual(len(calls), 2)
+            output = root / "var/ci-website-session.json"
+            self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(output.stat().st_uid, os.getuid())
 
 
 class NativeCatalogSmokeTests(unittest.TestCase):

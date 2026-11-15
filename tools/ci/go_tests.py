@@ -60,15 +60,17 @@ def require(condition, message):
         raise RunnerError(message)
 
 
-def capture(command, root, environment, timeout=1800):
+def capture(command, root, environment, timeout=1800, *, input_text=None):
     try:
-        process = subprocess.Popen(command, cwd=root, env=environment, stdout=subprocess.PIPE,
+        process = subprocess.Popen(command, cwd=root, env=environment,
+                                   stdin=subprocess.PIPE if input_text is not None else None,
+                                   stdout=subprocess.PIPE,
                                    stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
                                    errors="strict", start_new_session=True)
     except (OSError, UnicodeError, subprocess.SubprocessError):
         raise RunnerError("command unavailable") from None
     try:
-        stdout, _ = process.communicate(timeout=timeout)
+        stdout, _ = process.communicate(input=input_text, timeout=timeout)
         return subprocess.CompletedProcess(command, process.returncode, stdout)
     except BaseException as error:
         try:
@@ -506,6 +508,34 @@ def source_sha(root, environment, supplied=None):
     return candidate
 
 
+def instrumentation_inventory(root, environment, packages):
+    files = {}
+    for name, package in packages.items():
+        directory = Path(package["Dir"]).resolve()
+        for key in ("GoFiles", "CgoFiles"):
+            for filename in package.get(key, []):
+                source = coverage.inside(directory, filename)
+                relative = source.relative_to(Path(root).resolve()).as_posix()
+                require(relative not in files, "duplicate compiled coverage source")
+                files[relative] = name
+    require(bool(files), "compiled coverage sources absent")
+    result = capture(["go", "run", "./tools/ci_cover_manifest"], root, environment,
+                     input_text=json.dumps({"files": files}))
+    require(result.returncode == 0, "coverage source discovery failed")
+    try:
+        value = json.loads(result.stdout, object_pairs_hook=coverage.object_pairs)
+    except ValueError:
+        raise RunnerError("invalid coverage source inventory") from None
+    require(isinstance(value, dict) and set(value) == {"files"}
+            and isinstance(value["files"], dict) and set(value["files"]) == set(files),
+            "coverage source inventory incomplete")
+    for path, item in value["files"].items():
+        require(isinstance(item, dict) and set(item) == {"package", "instrumented"}
+                and item["package"] == files[path] and type(item["instrumented"]) is bool,
+                "invalid coverage source classification")
+    return value["files"]
+
+
 def coverage_metadata(root, path, packages, snapshot, identity, profile, module):
     try:
         blocks = coverage.parse_profile(path.read_text(encoding="utf-8"))
@@ -561,6 +591,8 @@ def run_profile(profile, output, root=ROOT, skip_policy=None, sha=None, environm
         require(len(modules) == 1 and None not in modules, "ambiguous source module")
         module = next(iter(modules))
         identity = {key: report[key] for key in ("sha", "toolchain", "source_digest")}
+        report["coverage_inventory"] = instrumentation_inventory(root, base_env, packages)
+        identity["coverage_inventory"] = report["coverage_inventory"]
         policy = load_policy(skip_policy or root / "tools/ci/go-skips.json", expected, profile)
         selected = ([("unit", list(OWNED_ROOTS), packages)] if profile == "unit" else [
             ("database-" + relative.rsplit("/", 1)[-1], ["./" + relative],

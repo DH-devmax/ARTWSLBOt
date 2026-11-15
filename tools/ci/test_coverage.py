@@ -94,18 +94,28 @@ class BundleTests(unittest.TestCase):
         self.digest = coverage.source_digest(self.snapshot)
 
     def metadata(self, profile="unit", package="example/internal/control", count=1):
-        relative = package.removeprefix("example/") + "/a.go"
-        name = package + "/a.go"
-        text = f"mode: atomic\n{name}:1.1,2.1 2 {count}\n"
+        inventory = {
+            relative: {"package": "example/" + str(Path(relative).parent),
+                       "instrumented": True}
+            for relative in self.snapshot if relative.endswith(".go")
+        }
+        packages = sorted({item["package"] for item in inventory.values()}) \
+            if profile == "unit" else [package]
+        files = {
+            item["package"] + "/a.go": {
+                "path": relative, "sha256": self.snapshot[relative], "package": item["package"]}
+            for relative, item in inventory.items() if item["package"] in packages
+        }
+        text = "mode: atomic\n" + "".join(
+            f"{name}:1.1,2.1 2 {count}\n" for name in files)
         blocks = coverage.parse_profile(text)
-        scope = {"profile": profile, "packages": [package]}
+        scope = {"profile": profile, "packages": packages}
         if profile == "database":
             scope["database"] = "wsl_test"
         meta = {"schema": 1, "sha": SHA, "module": "example", "source_digest": self.digest,
                 "source_files": self.snapshot, "toolchain": TOOLCHAIN, "tags": ["sodium"],
                 "race": True, "mode": "atomic", "status": "passed", "scope": scope,
-                "files": {name: {"path": relative, "sha256": self.snapshot[relative],
-                                 "package": package}}}
+                "coverage_inventory": inventory, "files": files}
         return copy.deepcopy(meta), blocks
 
     def bundle(self, name="unit", profile="unit"):
@@ -115,7 +125,8 @@ class BundleTests(unittest.TestCase):
                     for relative in ("internal/control", "internal/httpapi", "internal/gateway")
                     ] if profile == "database" else [self.metadata()]
         report = {"schema": 1, "status": "passed", "profile": profile, "sha": SHA,
-                  "toolchain": TOOLCHAIN, "source_digest": self.digest, "coverage": []}
+                  "toolchain": TOOLCHAIN, "source_digest": self.digest,
+                  "coverage_inventory": profiles[0][0]["coverage_inventory"], "coverage": []}
         for index, (meta, blocks) in enumerate(profiles):
             file = f"{index}.cover"
             path = directory / file
@@ -180,6 +191,87 @@ class BundleTests(unittest.TestCase):
         _, other = self.metadata(count=1)
         with self.assertRaises(coverage.CoverageError):
             coverage.merge_profiles([(meta, blocks), (meta, other)])
+
+    def test_empty_and_missing_whole_file_profiles_cannot_be_resealed(self):
+        for profile in ("unit", "database"):
+            meta, blocks = self.metadata(profile)
+            for empty in (False, True):
+                with self.subTest(profile=profile, empty=empty):
+                    changed = copy.deepcopy(meta)
+                    dropped = next(iter(changed["files"]))
+                    kept = {} if empty else {
+                        key: block for key, block in blocks.items() if block.file != dropped}
+                    changed["files"] = {
+                        name: item for name, item in changed["files"].items()
+                        if any(block.file == name for block in kept.values())}
+                    with self.assertRaises(coverage.CoverageError):
+                        coverage.validate_scope(changed, kept)
+
+    def test_unit_cannot_drop_a_package_from_both_scope_and_coverage(self):
+        meta, blocks = self.metadata()
+        dropped = meta["scope"]["packages"].pop()
+        meta["files"] = {name: item for name, item in meta["files"].items()
+                         if item["package"] != dropped}
+        kept = {key: block for key, block in blocks.items() if block.file in meta["files"]}
+        with self.assertRaises(coverage.CoverageError):
+            coverage.validate_scope(meta, kept)
+
+    def test_compiled_manifest_is_required_and_source_bound(self):
+        meta, _ = self.metadata()
+        for mutation in (
+            lambda value: value.pop("coverage_inventory"),
+            lambda value: value.update(coverage_inventory={}),
+            lambda value: value["coverage_inventory"].update({
+                "internal/control/missing.go": {"package": "example/internal/control",
+                                                "instrumented": True}}),
+            lambda value: value["coverage_inventory"]["internal/control/a.go"].update(
+                instrumented="true"),
+            lambda value: value["coverage_inventory"]["internal/control/a.go"].update(
+                package="example/internal/gateway"),
+        ):
+            changed = copy.deepcopy(meta)
+            mutation(changed)
+            with self.subTest(mutation=mutation), self.assertRaises(coverage.CoverageError):
+                coverage.validate_identity(changed)
+
+    def test_rehashed_whole_file_loss_is_rejected_when_loading_a_bundle(self):
+        directory = self.bundle()
+        path = directory / "0.cover"
+        meta_path = Path(str(path) + ".meta.json")
+        meta = coverage.read_json(meta_path)
+        dropped = "example/internal/gateway/a.go"
+        blocks = coverage.parse_profile(path.read_text())
+        path.write_text(coverage.profile_text({
+            key: block for key, block in blocks.items() if block.file != dropped}))
+        del meta["files"][dropped]
+        meta["cover_sha256"] = coverage.file_hash(path)
+        coverage.write_json(meta_path, meta)
+        with self.assertRaises(coverage.CoverageError):
+            coverage.load_bundle(directory, self.root)
+        meta["coverage_inventory"]["internal/gateway/a.go"]["instrumented"] = False
+        coverage.write_json(meta_path, meta)
+        with self.assertRaises(coverage.CoverageError):
+            coverage.load_bundle(directory, self.root)
+
+    def test_header_only_profiles_cannot_produce_a_passing_zero_statement_merge(self):
+        directories = [self.bundle(), self.bundle("database", "database")]
+        for directory in directories:
+            report_path = directory / "report.json"
+            report = coverage.read_json(report_path)
+            for item in report["coverage_inventory"].values():
+                item["instrumented"] = False
+            coverage.write_json(report_path, report)
+            for artifact in report["coverage"]:
+                path = directory / artifact["file"]
+                path.write_text("mode: atomic\n")
+                meta_path = directory / artifact["metadata"]
+                meta = coverage.read_json(meta_path)
+                meta.update(files={}, cover_sha256=coverage.file_hash(path),
+                            coverage_inventory=report["coverage_inventory"])
+                coverage.write_json(meta_path, meta)
+        with self.assertRaises(coverage.CoverageError) as caught:
+            coverage.merge_directories(directories, self.root / "empty", self.root)
+        self.assertEqual(str(caught.exception), "merged coverage has no statements")
 
     def test_source_checksums_and_scope_are_enforced(self):
         meta, blocks = self.metadata()

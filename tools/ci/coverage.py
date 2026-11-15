@@ -167,6 +167,18 @@ def validate_identity(meta):
     require(meta.get("status") == "passed", "coverage run did not pass")
     require(isinstance(meta.get("module"), str), "source module absent")
     relative_path(meta["module"])
+    inventory = meta.get("coverage_inventory")
+    require(isinstance(inventory, dict) and bool(inventory),
+            "compiled coverage source inventory absent")
+    for name, item in inventory.items():
+        path = relative_path(name)
+        require(path.parts[0] in ("cmd", "internal", "tools") and path.suffix == ".go"
+                and not path.name.endswith("_test.go") and name in files,
+                "compiled coverage source outside inventory")
+        require(isinstance(item, dict) and set(item) == {"package", "instrumented"}
+                and type(item["instrumented"]) is bool
+                and item["package"] == meta["module"] + "/" + str(path.parent),
+                "invalid compiled coverage source")
 
 
 def validate_scope(meta, blocks):
@@ -188,10 +200,19 @@ def validate_scope(meta, blocks):
                 and packages[0] in [meta["module"] + "/internal/" + name
                                     for name in ("control", "httpapi", "gateway")],
                 "invalid database coverage scope")
+    else:
+        require(set(packages) == {item["package"] for item in meta["coverage_inventory"].values()},
+                "unit package coverage incomplete")
     mapping = meta.get("files")
     require(isinstance(mapping, dict), "coverage source mapping absent")
     require(set(mapping) == {block.file for block in blocks.values()},
             "coverage source mapping mismatch")
+    expected = {
+        item["package"] + "/" + PurePosixPath(path).name
+        for path, item in meta["coverage_inventory"].items()
+        if item["package"] in packages and item["instrumented"]
+    }
+    require(set(mapping) == expected, "compiled coverage files missing or unexpected")
     paths = set()
     for name, source in mapping.items():
         require(isinstance(source, dict)
@@ -212,7 +233,8 @@ def validate_scope(meta, blocks):
 
 
 def compatible(left, right):
-    for key in ("sha", "source_digest", "source_files", "toolchain", "tags", "race", "mode", "module"):
+    for key in ("sha", "source_digest", "source_files", "coverage_inventory",
+                "toolchain", "tags", "race", "mode", "module"):
         require(left[key] == right[key], "incompatible coverage provenance")
 
 
@@ -258,7 +280,7 @@ def load_bundle(directory, root):
         validate_scope(meta, blocks)
         require(report["profile"] == meta["scope"]["profile"],
                 "report and artifact profile mismatch")
-        for key in ("sha", "source_digest", "toolchain"):
+        for key in ("sha", "source_digest", "toolchain", "coverage_inventory"):
             require(report.get(key) == meta[key], "report and artifact provenance mismatch")
         validate_sources(root, meta)
         result.append((meta, blocks))
@@ -277,6 +299,7 @@ def merge_profiles(profiles):
     merged = {}
     files = {}
     layouts = {}
+    package_layouts = {}
     scopes = []
     for meta, blocks in profiles:
         validate_identity(meta)
@@ -285,6 +308,13 @@ def merge_profiles(profiles):
         layout = {}
         for block in blocks.values():
             layout.setdefault(block.file, set()).add(block.location[1:] + (block.statements,))
+        for package in meta["scope"]["packages"]:
+            package_layout = {name: coordinates for name, coordinates in layout.items()
+                              if meta["files"][name]["package"] == package}
+            if package in package_layouts:
+                require(package_layouts[package] == package_layout,
+                        "coverage package layout changed")
+            package_layouts[package] = package_layout
         for name, coordinates in layout.items():
             if name in layouts:
                 require(layouts[name] == coordinates, "coverage block layout changed")
@@ -357,6 +387,8 @@ def merge_directories(inputs, output, root=ROOT, base=None):
     require({meta["scope"]["profile"] for meta, _ in profiles} == {"unit", "database"},
             "both unit and database coverage are required")
     baseline, blocks, files, scopes = merge_profiles(profiles)
+    require(any(block.statements > 0 for block in blocks.values()),
+            "merged coverage has no statements")
     changed = changed_files(root, base) if base else None
     summary = summarize(blocks, files, changed)
     summary.update({"schema": 1, "sha": baseline["sha"], "status": "passed",
@@ -369,7 +401,8 @@ def merge_directories(inputs, output, root=ROOT, base=None):
     cover = output / "merged.cover"
     cover.write_text(profile_text(blocks), encoding="utf-8")
     metadata = {key: baseline[key] for key in
-                ("schema", "sha", "source_digest", "source_files", "toolchain", "tags",
+                ("schema", "sha", "source_digest", "source_files", "coverage_inventory",
+                 "toolchain", "tags",
                  "race", "mode", "status", "module")}
     metadata.update({"files": files, "scopes": scopes, "cover_sha256": file_hash(cover)})
     write_json(output / "merged.cover.meta.json", metadata)

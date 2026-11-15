@@ -423,6 +423,43 @@ func helper() {}
         self.assertEqual({PACKAGE}, set(packages))
         self.assertEqual({"internal/control/a_test.go"}, set(files))
 
+    def test_compiled_coverage_inventory_uses_only_selected_go_and_cgo_files(self):
+        (self.directory / "a.go").write_text("package control\n")
+        (self.directory / "cgo.go").write_text("package control\n")
+        package = dict(self.package, GoFiles=["a.go"], CgoFiles=["cgo.go"],
+                       IgnoredGoFiles=["ignored.go"])
+        files = {
+            "internal/control/a.go": {"package": PACKAGE, "instrumented": True},
+            "internal/control/cgo.go": {"package": PACKAGE, "instrumented": False},
+        }
+        with patch.object(runner, "capture", return_value=subprocess.CompletedProcess(
+                [], 0, json.dumps({"files": files}))) as capture:
+            result = runner.instrumentation_inventory(self.root, {}, {PACKAGE: package})
+        self.assertEqual(result, files)
+        self.assertEqual(capture.call_args.args[0], ["go", "run", "./tools/ci_cover_manifest"])
+        self.assertEqual(json.loads(capture.call_args.kwargs["input_text"]),
+                         {"files": {name: PACKAGE for name in files}})
+
+    def test_compiled_coverage_inventory_rejects_incomplete_or_invalid_helper_output(self):
+        (self.directory / "a.go").write_text("package control\n")
+        package = dict(self.package, GoFiles=["a.go"])
+        valid = {"package": PACKAGE, "instrumented": True}
+        for response in ("not json", '{"files":{},"files":{}}',
+                         json.dumps({"files": {}}),
+                         json.dumps({"files": {"internal/control/a.go": {
+                             **valid, "instrumented": "true"}}}),
+                         json.dumps({"files": {"internal/control/a.go": {
+                             **valid, "package": PACKAGE + "/other"}}})):
+            with self.subTest(response=response), \
+                    patch.object(runner, "capture", return_value=subprocess.CompletedProcess(
+                        [], 0, response)), self.assertRaises(
+                            (runner.RunnerError, coverage.CoverageError)):
+                runner.instrumentation_inventory(self.root, {}, {PACKAGE: package})
+        with patch.object(runner, "capture", return_value=subprocess.CompletedProcess(
+                [], 1, "SECRET")), self.assertRaises(runner.RunnerError) as caught:
+            runner.instrumentation_inventory(self.root, {}, {PACKAGE: package})
+        self.assertNotIn("SECRET", str(caught.exception))
+
 
 class RunnerExecutionTests(unittest.TestCase):
     def setUp(self):
@@ -448,6 +485,10 @@ class RunnerExecutionTests(unittest.TestCase):
         (self.root / ".env").write_text("".join(
             f"{key}=postgres://test:secret@127.0.0.1:5432/wsl_test\n" for key in runner.DB_KEYS))
         self.calls = []
+        self.coverage_inventory = {
+            relative + "/a.go": {"package": "example/" + relative, "instrumented": True}
+            for relative in runner.DB_PACKAGES
+        }
 
     def fake_capture(self, command, root, environment, timeout=1800):
         self.calls.append((list(command), dict(environment)))
@@ -488,6 +529,8 @@ class RunnerExecutionTests(unittest.TestCase):
                              return_value=(self.packages, self.expected, self.snapshot)), \
                 patch.object(runner, "discover_packages",
                              return_value=(self.packages, self.snapshot)), \
+                patch.object(runner, "instrumentation_inventory",
+                             return_value=self.coverage_inventory), \
                 patch.object(runner, "capture", side_effect=side_effect or self.fake_capture):
             return runner.run_profile(profile, self.root / output, self.root, environment={})
 
@@ -701,6 +744,39 @@ class RunnerExecutionTests(unittest.TestCase):
         with self.assertRaises(coverage.CoverageError):
             coverage.load_bundle(self.root / "output", self.root)
 
+    def test_empty_batch_coverage_fails_despite_complete_test_results(self):
+        self.set_parents(PACKAGE, [f"Test{i:03d}" for i in range(35)])
+
+        def empty(command, root, environment, timeout=1800):
+            result = self.fake_capture(command, root, environment, timeout)
+            if len(self.calls) == 2:
+                path = Path(next(value.split("=", 1)[1] for value in command
+                                 if value.startswith("-coverprofile=")))
+                path.write_text("mode: atomic\n")
+            return result
+
+        report = self.run_fixture("database", empty)
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(report["counts"]["passed"], 35)
+        self.assertEqual(report["coverage"], [])
+        self.assertIn("runner_validation_failed", report["errors"])
+
+    def test_missing_whole_file_fails_before_metadata_can_hide_the_loss(self):
+        def missing(command, root, environment, timeout=1800):
+            result = self.fake_capture(command, root, environment, timeout)
+            path = Path(next(value.split("=", 1)[1] for value in command
+                             if value.startswith("-coverprofile=")))
+            path.write_text("".join(line for line in path.read_text().splitlines(True)
+                                    if "internal/gateway/a.go" not in line))
+            return result
+
+        report = self.run_fixture("unit", missing)
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["counts"]["passed"], 3)
+        self.assertEqual(report["coverage"], [])
+        self.assertIn("runner_validation_failed", report["errors"])
+
     def test_database_batch_coverage_provenance_change_fails_closed(self):
         self.set_parents(PACKAGE, [f"Test{i:03d}" for i in range(33)])
         original = runner.coverage_metadata
@@ -798,6 +874,8 @@ class RunnerExecutionTests(unittest.TestCase):
                              return_value=(self.packages, self.expected, self.snapshot)), \
                 patch.object(runner, "discover_packages",
                              return_value=(self.packages, dict(self.snapshot, new="b" * 64))), \
+                patch.object(runner, "instrumentation_inventory",
+                             return_value=self.coverage_inventory), \
                 patch.object(runner, "capture", side_effect=self.fake_capture):
             report = runner.run_profile("unit", self.root / "new-source", self.root, environment={})
         self.assertEqual(report["status"], "failed")
@@ -808,6 +886,8 @@ class RunnerExecutionTests(unittest.TestCase):
                              return_value=(self.packages, self.expected, self.snapshot)), \
                 patch.object(runner, "discover_packages",
                              return_value=(self.packages, self.snapshot)), \
+                patch.object(runner, "instrumentation_inventory",
+                             return_value=self.coverage_inventory), \
                 patch.object(runner, "capture", side_effect=self.fake_capture):
             report = runner.run_profile("unit", self.root / "new-toolchain", self.root, environment={})
         self.assertEqual(report["status"], "failed")
