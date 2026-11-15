@@ -44,6 +44,8 @@ func (f *isolatedSignup) Request(ctx context.Context, route string, in map[strin
 		return nil, &nativeauth.Error{Code: "native_invalid_sms", Number: 1010, Submitted: true}
 	case 3:
 		return nil, &nativeauth.Error{Code: "native_dns_fake_ip"}
+	case 4:
+		return nil, &nativeauth.Error{Code: "native_signup_rejected_unspecified", Number: 1001, Submitted: true}
 	}
 	id, _ := json.Marshal(f.accountID.Load())
 	return map[string]json.RawMessage{"accountId": id}, nil
@@ -64,7 +66,7 @@ func TestPostgresNativeSignup(t *testing.T) {
 		t.Fatal(err)
 	}
 	vault, _ := security.NewVault(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)))
-	s := New(db, vault, "http://127.0.0.1:5173", false)
+	s := newCaptchaTestServer(db, vault, "http://127.0.0.1:5173", false)
 	t.Cleanup(func() { s.Native.Close() })
 	server := httptest.NewServer(s.Handler())
 	t.Cleanup(server.Close)
@@ -74,7 +76,7 @@ func TestPostgresNativeSignup(t *testing.T) {
 	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
 	d := nativeauth.Deployment{Origin: "https://example.invalid", Headers: map[string]string{},
 		Metadata: make([]uint64, 14), SigningSeed: key, BodyKey: key, ServerKey: key,
-		CaptchaID: "synthetic-captcha", DeviceID: "synthetic-device", ProtocolVersion: "3.7.3"}
+		CaptchaID: "synthetic-captcha", DeviceID: "synthetic-device", ProtocolVersion: nativeauth.DesktopProtocolVersion}
 	encoded, _ := json.Marshal(d)
 	expect(t, admin, "PUT", "/native-deployment", map[string]any{"version": 0, "configuration": string(encoded)}, 200)
 	if _, err := db.Tenant.Exec(ctx, `SELECT transaction_id FROM native_signup_attempts`); err == nil {
@@ -165,6 +167,30 @@ func TestPostgresNativeSignup(t *testing.T) {
 	var state string
 	if err := db.Platform.QueryRow(ctx, `SELECT state FROM native_signup_attempts WHERE account_id=$1`, retryAccount).Scan(&state); err != nil || state != "rejected" {
 		t.Fatal("conclusive rejection was not recorded", err)
+	}
+	fake.outcome.Store(4)
+	step(retryAccount, retryID, "signup_submit", 202)
+	rejected := wait(retryAccount, retryID, "signup_sms_required")
+	var rejection struct {
+		Purpose      string `json:"purpose"`
+		Error        string `json:"error"`
+		ProviderCode int    `json:"provider_code"`
+	}
+	if err := json.Unmarshal(rejected, &rejection); err != nil || rejection.Purpose != "signup" ||
+		rejection.Error != "native_signup_rejected_unspecified" || rejection.ProviderCode != 1001 {
+		t.Fatal("registration rejection became a login error", err)
+	}
+	var code string
+	if err := db.Platform.QueryRow(ctx, `SELECT state,result_code FROM native_signup_attempts WHERE account_id=$1`,
+		retryAccount).Scan(&state, &code); err != nil || state != "rejected" || code != rejection.Error {
+		t.Fatal("generic rejected outcome was not durably recorded", err)
+	}
+	count = fake.registers.Load()
+	for range 3 {
+		expect(t, admin, "GET", "/accounts/"+retryAccount+"/native-auth/"+retryID, nil, 200)
+	}
+	if fake.registers.Load() != count {
+		t.Fatal("reading a generic rejection retried registration")
 	}
 	fake.outcome.Store(0)
 	fake.accountID.Store(457)

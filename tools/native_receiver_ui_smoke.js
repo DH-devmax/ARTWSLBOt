@@ -1,9 +1,10 @@
 // All writes and account telemetry are intercepted synthetic fixtures.
 // prettier-ignore
-async (page) => {
+async (page, fixtureMe) => {
   const base = 'http://127.0.0.1:5173'
   if (new URL(page.url()).origin !== base) throw new Error('Local console only')
-  const realMe = (await (await page.request.get(base + '/api/v1/me')).json()).data
+  const realMe = fixtureMe || { user: { id: '60000000-0000-4000-8000-000000000099', role: 'superadmin' },
+    permissions: ['overview:read', 'accounts:read', 'groups:read'] }
   const storage = await page.evaluate(() => Object.fromEntries(Object.entries(sessionStorage).filter(([k]) => k.startsWith('wsl:'))))
   const id = '60000000-0000-4000-8000-000000000001'
   const account = { id, name: '接收测试机器人', workspace: 'wsl', auth_state: 'authenticated', version: 1, connection_enabled: false, runtime_state: 'connected' }
@@ -22,6 +23,7 @@ async (page) => {
       enabled = input.enabled
       data = { enabled, revision: ++revision }
     } else if (path === '/me') data = realMe
+    else if (path === '/workspaces') data = { items: [{ id: 'wsl', name: '旺商聊机器人' }] }
     else if (path === '/accounts') data = [account]
     else if (path === '/overview') data = { accounts: 1, groups: 0, limits: { accounts: 10, groups: 100, ai_groups: 100 } }
     else if (path.endsWith('/dashboard')) data = {
@@ -33,7 +35,7 @@ async (page) => {
       receiver: {enabled,revision,observed:enabled,observed_at:now,snapshot:enabled?{
         state:'connected',heartbeat_at:now,heartbeat_ms:12.3,last_received_at:now,last_ack_at:now,
         frames:102,messages:100,duplicates:2,acks:100,quarantined:0,reconnects:0,queue_depth:0,queue_capacity:32,per_second:1.67,received_60s:100,
-        durable_p95_ms:8.4,ack_p95_ms:10.1,latency_samples:100
+        durable_p95_ms:8.4,ack_p95_ms:10.1,latency_samples:100,ack_samples:100
       }:null}
     }
     await route.fulfill({json:{code:0,data,msg:''}})
@@ -51,9 +53,10 @@ async (page) => {
     await toggle.waitFor()
     if (writes.length) throw new Error('Selecting account started receiver')
     await toggle.click()
-    await dashboard.getByText('接收正常',{exact:true}).waitFor()
-    await dashboard.getByText('8.4 ms',{exact:true}).waitFor()
-    await dashboard.getByText('10.1 ms',{exact:true}).waitFor()
+    await dashboard.locator('.account-sample-meta').getByText('接收正常',{exact:true}).waitFor()
+    await dashboard.getByRole('button', { name: '运行诊断', exact: true }).click()
+    await dashboard.getByText('8.40 ms · 100 样本',{exact:true}).waitFor()
+    await dashboard.getByText('10.10 ms · 100 样本',{exact:true}).waitFor()
     await dashboard.getByText('1.67 条/秒',{exact:true}).waitFor()
     for (const viewport of [{width:320,height:740},{width:647,height:779},{width:1440,height:960}]) {
       await page.setViewportSize(viewport)
@@ -63,10 +66,10 @@ async (page) => {
       }
       const fits=await dashboard.evaluate((el)=>el.scrollWidth<=el.clientWidth+1)
       if(!fits) throw new Error('Receiver metrics overflow viewport')
-      await page.screenshot({path:`/tmp/output/playwright/native-receiver-${viewport.width}.png`,fullPage:true})
+      await page.screenshot({path:`output/playwright/native-receiver-${viewport.width}.png`,fullPage:true})
     }
     await toggle.click()
-    await dashboard.getByText('接入停用',{exact:true}).waitFor()
+    await dashboard.locator('.account-sample-meta').getByText('接入停用',{exact:true}).waitFor()
     if (writes.length!==2||writes[0].enabled!==true||writes[1].enabled!==false) throw new Error('Receiver controls did not preserve independent state')
     return {writes:2,viewports:[320,647,1440],realNativeRequests:0}
   } finally {
@@ -78,6 +81,5 @@ async (page) => {
     await page.setViewportSize({width:1440,height:960})
     await page.goto(base+'/#overview')
     await page.reload()
-    await page.getByRole('heading',{name:'工作台',exact:true}).waitFor()
   }
 }

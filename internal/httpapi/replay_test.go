@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"wangshangliao/internal/gateway"
+	"wangshangliao/internal/monitor"
 	"wangshangliao/internal/security"
 )
 
@@ -42,6 +43,8 @@ func TestReplayLoad(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	vault, _ := security.NewVault(base64.StdEncoding.EncodeToString([]byte(strings.Repeat("r", 32))))
+	monitorEnabled := os.Getenv("WSL_MONITOR_REPLAY") == "1"
+	resourceReader := monitor.NewResourceReader()
 	ledger := &gateway.PostgresLedger{DB: db.Platform, Vault: vault}
 	payload := []byte(`{"type":"synthetic_replay","text":"` + strings.Repeat("x", 480) + `"}`)
 	accounts := make([]string, 10)
@@ -49,6 +52,16 @@ func TestReplayLoad(t *testing.T) {
 		if err := db.Platform.QueryRow(ctx, `INSERT INTO accounts(name) VALUES($1) RETURNING id::text`, fmt.Sprintf("replay-%d", i)).Scan(&accounts[i]); err != nil {
 			t.Fatal(err)
 		}
+	}
+	server := newCaptchaTestServer(db, vault, "http://127.0.0.1:5173", false)
+	defer server.Native.Close()
+	server.ResourceSampler = monitor.NewSampler("api_self", nil) // No real upstream participates in this replay.
+	resourceBefore := resourceReader.Read()
+	poolBefore := db.Platform.Stat()
+	if monitorEnabled {
+		monitorCtx, stop := context.WithCancel(ctx)
+		finished := server.RunMonitoring(monitorCtx)
+		defer func() { stop(); <-finished }()
 	}
 	var mu sync.Mutex
 	latencies := make([]float64, 0, (100*seconds + 500*burstSeconds))
@@ -130,6 +143,10 @@ func TestReplayLoad(t *testing.T) {
 		"steady_requested_seconds": seconds, "steady_actual_seconds": steady.Seconds(), "steady_rate": 100,
 		"burst_requested_seconds": burstSeconds, "burst_actual_seconds": burst.Seconds(), "burst_rate": 500,
 		"offered": offered, "acked": acked.Load(), "persisted": rows,
+		"monitor_enabled": monitorEnabled, "go_test_process_before": resourceBefore, "go_test_process_after": resourceReader.Read(),
+		"monitor_scope":             "shared API initialization; synthetic inbox only; process metrics/native/decoder disabled",
+		"pool_empty_acquires_delta": db.Platform.Stat().EmptyAcquireCount() - poolBefore.EmptyAcquireCount(),
+		"pool_acquire_ms_delta":     float64((db.Platform.Stat().AcquireDuration() - poolBefore.AcquireDuration()).Microseconds()) / 1000,
 		"receive_to_durable_ack_ms": map[string]float64{"p50": percentile(.50), "p95": percentile(.95), "p99": percentile(.99), "max": latencies[len(latencies)-1]},
 		"note":                      "ACK timing is a local upper bound including batch delay, encryption and commit. Not a native protocol, full business, AI or target-machine acceptance.",
 	}
@@ -141,9 +158,16 @@ func TestReplayLoad(t *testing.T) {
 	if err = os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(filepath.Join(dir, "replay-report.json"), b, 0600); err != nil {
+	name := "replay-report.json"
+	if os.Getenv("WSL_MONITOR_REPLAY") != "" {
+		name = "replay-report-monitor-off.json"
+		if monitorEnabled {
+			name = "replay-report-monitor-on.json"
+		}
+	}
+	if err = os.WriteFile(filepath.Join(dir, name), b, 0600); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("offered=%d acked=%d persisted=%d p95=%.3fms p99=%.3fms; report: var/replay-report.json; capacity NOT accepted",
-		offered, acked.Load(), rows, percentile(.95), percentile(.99))
+	t.Logf("offered=%d acked=%d persisted=%d p95=%.3fms p99=%.3fms; report: var/%s; capacity NOT accepted",
+		offered, acked.Load(), rows, percentile(.95), percentile(.99), name)
 }

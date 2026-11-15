@@ -21,6 +21,7 @@ type Input struct {
 	Password string `json:"password"`
 	Captcha  string `json:"captcha"`
 	Code     string `json:"code"`
+	// Kept for older clients; desktop registration does not submit a nickname.
 	Nickname string `json:"nickname"`
 	Agreed   bool   `json:"agreed"`
 }
@@ -32,6 +33,8 @@ type View struct {
 	Error             string    `json:"error"`
 	ProviderCode      int       `json:"provider_code,omitempty"`
 	Diagnostic        string    `json:"diagnostic,omitempty"`
+	DiagnosticVersion int       `json:"diagnostic_version,omitempty"`
+	FailureStage      string    `json:"failure_stage,omitempty"`
 	CaptchaID         string    `json:"captcha_id"`
 	ExpiresAt         time.Time `json:"expires_at"`
 	RetryAt           time.Time `json:"retry_at"`
@@ -69,14 +72,33 @@ type startBudget struct {
 }
 
 type Manager struct {
-	mu      sync.Mutex
-	items   map[string]*transaction
-	starts  map[string]startBudget
-	Factory func(Deployment) (AuthClient, error)
+	mu          sync.Mutex
+	items       map[string]*transaction
+	starts      map[string]startBudget
+	diagnostics DiagnosticRecorder
+	Factory     func(Deployment) (AuthClient, error)
+	mobile      bool
+	closing     chan struct{}
+	workers     sync.WaitGroup
 }
 
 func NewManager() *Manager {
-	return &Manager{items: make(map[string]*transaction), starts: make(map[string]startBudget), Factory: NewClient}
+	return NewManagerWithDiagnostics(nil)
+}
+
+func NewManagerWithDiagnostics(record DiagnosticRecorder) *Manager {
+	return &Manager{items: make(map[string]*transaction), starts: make(map[string]startBudget),
+		diagnostics: record, Factory: NewClient}
+}
+
+func NewMobileManager() *Manager {
+	return NewMobileManagerWithDiagnostics(nil)
+}
+
+func NewMobileManagerWithDiagnostics(record DiagnosticRecorder) *Manager {
+	m := NewManagerWithDiagnostics(record)
+	m.mobile, m.Factory = true, NewMobileClient
+	return m
 }
 
 func (m *Manager) ActiveAccount(account string) bool {
@@ -96,6 +118,9 @@ func (m *Manager) Start(owner, account string, d Deployment, commit func(context
 }
 
 func (m *Manager) StartSignup(owner, account string, d Deployment, hooks SignupHooks, source RequestIDSource) (View, error) {
+	if m.mobile {
+		return View{}, rejection("native_signup_unavailable")
+	}
 	if hooks.BeforeSubmit == nil || hooks.Complete == nil {
 		return View{}, rejection("native_signup_unavailable")
 	}
@@ -103,6 +128,9 @@ func (m *Manager) StartSignup(owner, account string, d Deployment, hooks SignupH
 }
 
 func (m *Manager) start(owner, account string, d Deployment, commit func(context.Context, Session, string) error, signup *SignupHooks, sources ...RequestIDSource) (View, error) {
+	if err := validateDeploymentMode(d, m.mobile); err != nil {
+		return View{}, err
+	}
 	m.mu.Lock()
 	var retired AuthClient
 	defer func() {
@@ -111,6 +139,9 @@ func (m *Manager) start(owner, account string, d Deployment, commit func(context
 			retired.Close()
 		}
 	}()
+	if m.closing != nil {
+		return View{}, rejection("native_auth_closed")
+	}
 	var previous *transaction
 	for _, item := range m.items {
 		if item.view.AccountID == account && time.Now().Before(item.view.ExpiresAt) {
@@ -153,8 +184,14 @@ func (m *Manager) start(owner, account string, d Deployment, commit func(context
 	if err != nil {
 		return View{}, err
 	}
-	if concrete, ok := client.(*Client); ok && len(sources) == 1 {
-		concrete.requestIDs = sources[0]
+	if concrete, ok := client.(*Client); ok {
+		if concrete.mobile != m.mobile {
+			client.Close()
+			return View{}, rejection("native_auth_mode_mismatch")
+		}
+		if len(sources) == 1 {
+			concrete.requestIDs = sources[0]
+		}
 	}
 	id, err := security.Token()
 	if err != nil {
@@ -230,15 +267,31 @@ func (m *Manager) Cancel(owner, account, id string) (View, error) {
 
 func (m *Manager) Close() {
 	m.mu.Lock()
+	if done := m.closing; done != nil {
+		m.mu.Unlock()
+		<-done
+		return
+	}
+	done := make(chan struct{})
+	m.closing = done
 	type target struct{ owner, account, id string }
 	targets := make([]target, 0, len(m.items))
 	for id, tx := range m.items {
 		targets = append(targets, target{tx.owner, tx.view.AccountID, id})
 	}
 	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.closing = nil
+		close(done)
+		m.mu.Unlock()
+	}()
 	for _, t := range targets {
 		_, _ = m.Cancel(t.owner, t.account, t.id)
 	}
+	// Config imports reuse this manager after cancelling the previous flows.
+	// Exclude new work only until all cancelled workers have left.
+	m.workers.Wait()
 }
 
 func (m *Manager) CancelAccount(account string) {
@@ -267,6 +320,9 @@ func (m *Manager) ForgetAccount(account string) {
 func (m *Manager) Action(owner, account, id string, in Input) (View, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closing != nil {
+		return View{}, rejection("native_auth_closed")
+	}
 	tx, err := m.current(owner, account, id)
 	if err != nil {
 		return View{}, err
@@ -297,9 +353,6 @@ func (m *Manager) Action(owner, account, id string, in Input) (View, error) {
 			if (state != "pending" && state != "failed") || !phoneDigits(in.Account) || in.Account[0] != '1' {
 				return View{}, rejection("native_auth_state_conflict")
 			}
-			if !signupNickname(in.Nickname) {
-				return View{}, rejection("native_invalid_input")
-			}
 		case "signup_resend":
 			if state != "signup_sms_required" || tx.phone == nil || tx.key == "" {
 				return View{}, rejection("native_auth_state_conflict")
@@ -308,7 +361,7 @@ func (m *Manager) Action(owner, account, id string, in Input) (View, error) {
 			if state != "signup_sms_required" || tx.phone == nil || tx.key == "" {
 				return View{}, rejection("native_auth_state_conflict")
 			}
-			if !sixDigits(in.Code) || !signupPassword(in.Password) || !signupNickname(in.Nickname) {
+			if !sixDigits(in.Code) || !signupPassword(in.Password) {
 				return View{}, rejection("native_invalid_input")
 			}
 		default:
@@ -351,9 +404,11 @@ func (m *Manager) Action(owner, account, id string, in Input) (View, error) {
 	}
 	tx.attempts++
 	tx.busy, tx.view.Status, tx.view.Error, tx.view.ProviderCode = true, "working", "", 0
-	tx.view.Diagnostic = ""
+	tx.view.Diagnostic, tx.view.FailureStage = "", ""
+	tx.view.DiagnosticVersion = 0
 	view := tx.view
 	phone, key, original := tx.phone, tx.key, tx.originalKey
+	m.workers.Add(1)
 	go m.run(tx, in, phone, key, original)
 	return view, nil
 }
@@ -383,13 +438,6 @@ func signupPassword(value string) bool {
 	return !letters && !digits && !special
 }
 
-func signupNickname(value string) bool {
-	if !utf8.ValidString(value) || strings.TrimSpace(value) == "" || len(utf16.Encode([]rune(value))) > 20 {
-		return false
-	}
-	return strings.IndexFunc(value, unicode.IsControl) < 0
-}
-
 func phoneDigits(account string) bool {
 	if len(account) != 11 {
 		return false
@@ -403,6 +451,7 @@ func phoneDigits(account string) bool {
 }
 
 func (m *Manager) run(tx *transaction, in Input, phone map[string]any, key, original string) {
+	defer m.workers.Done()
 	ctx, cancel := context.WithTimeout(tx.ctx, 40*time.Second)
 	defer cancel()
 	state, retry, uid, nickname := "failed", time.Time{}, "", ""
@@ -412,6 +461,7 @@ func (m *Manager) run(tx *transaction, in Input, phone map[string]any, key, orig
 	var err error
 	var nextPhone map[string]any
 	var nextKey, nextOriginal string
+	stage := ""
 	defer func() {
 		if recover() != nil {
 			err, state = rejection("native_auth_failed"), "failed"
@@ -427,14 +477,21 @@ func (m *Manager) run(tx *transaction, in Input, phone map[string]any, key, orig
 		}
 		tx.busy = false
 		if err != nil {
+			tx.view.FailureStage = stage
 			var native *Error
 			if errors.As(err, &native) {
 				tx.view.Error, tx.view.ProviderCode = native.Code, native.Number
-				tx.view.Diagnostic = native.Diagnostic
+				tx.view.Diagnostic = safeAuthDiagnostic(native.Diagnostic)
+				if tx.view.Diagnostic != "" {
+					tx.view.DiagnosticVersion = AuthDiagnosticVersion
+				}
 				if native.RetryAfter > 0 {
 					retry = time.Now().Add(native.RetryAfter)
 				}
 				if native.Code == "native_transport_unknown" || native.Code == "native_response_invalid" {
+					state = "unknown"
+				}
+				if m.mobile && (native.Code == "native_login_binding" || native.Code == "native_mobile_login_response_invalid") {
 					state = "unknown"
 				}
 				if native.Code == "native_security_required" {
@@ -462,23 +519,30 @@ func (m *Manager) run(tx *transaction, in Input, phone map[string]any, key, orig
 		if state == "authenticated" || state == "registered" {
 			tx.phone, tx.key, tx.originalKey = nil, "", ""
 		}
+		failedView := tx.view
 		m.mu.Unlock()
+		if err != nil {
+			m.recordFailure(tx.owner, failedView.AccountID, failedView)
+		}
 		if state == "authenticated" || state == "registered" {
 			tx.client.Close()
 		}
 	}()
 	switch in.Action {
 	case "signup_sms", "signup_resend":
+		stage = "signup_sms"
 		resend = time.Now().Add(60 * time.Second)
 		if in.Action == "signup_sms" {
-			number, _ := strconv.ParseInt(in.Account, 10, 64)
-			phone = map[string]any{"countryCode": 86, "nationalNumber": number, "maskedNationalNumber": ""}
+			// Register-03d04bd2.js uses strings and preserves this exact phone
+			// object from the SMS request through registration.
+			phone = map[string]any{"countryCode": "86", "nationalNumber": in.Account,
+				"maskedNationalNumber": in.Account[:3] + "****" + in.Account[7:]}
 		} else {
 			state = "signup_sms_required"
 		}
 		var result map[string]json.RawMessage
 		result, err = tx.client.Request(ctx, "/v1/verify/sms-anon", map[string]any{
-			"ty": "VERIFY_FOR_REGISTER", "phone": phone, "validateStr": in.Captcha, "Key": "",
+			"ty": "VERIFY_FOR_REGISTER", "phone": phone, "validateStr": in.Captcha,
 		})
 		if err != nil {
 			return
@@ -490,6 +554,7 @@ func (m *Manager) run(tx *transaction, in Input, phone map[string]any, key, orig
 		nextPhone, state = phone, "signup_sms_required"
 		return
 	case "signup_submit":
+		stage = "signup_submit"
 		state = "signup_sms_required"
 		if err = tx.signup.BeforeSubmit(ctx, tx.view.ID); err != nil {
 			return
@@ -498,7 +563,7 @@ func (m *Manager) run(tx *transaction, in Input, phone map[string]any, key, orig
 		var result map[string]json.RawMessage
 		result, err = tx.client.Request(ctx, "/v1/user/register", map[string]any{
 			"key": key, "verificationCode": in.Code, "password": in.Password,
-			"validateStr": in.Captcha, "phone": phone, "nickName": strings.TrimSpace(in.Nickname),
+			"validateStr": in.Captcha, "phone": phone,
 		})
 		if err == nil {
 			var accountID uint64
@@ -513,6 +578,7 @@ func (m *Manager) run(tx *transaction, in Input, phone map[string]any, key, orig
 		recordErr := tx.signup.Complete(recordCtx, tx.view.ID, registeredAccount, err)
 		done()
 		if recordErr != nil {
+			stage = "signup_record"
 			err = &Error{Code: "native_signup_record_pending", Submitted: true}
 			state = "unknown"
 			return
@@ -522,6 +588,7 @@ func (m *Manager) run(tx *transaction, in Input, phone map[string]any, key, orig
 		}
 		return
 	case "password":
+		stage = "password_login"
 		kind := "LOGIN_TYPE_ACCOUNT_PWD"
 		if phoneDigits(in.Account) {
 			kind = "LOGIN_TYPE_PHONE_PWD"
@@ -530,6 +597,7 @@ func (m *Manager) run(tx *transaction, in Input, phone map[string]any, key, orig
 		err = tx.client.Login(ctx, params)
 		var native *Error
 		if errors.As(err, &native) && native.Number == 1069 {
+			stage = "device_verification"
 			resend = time.Now().Add(60 * time.Second)
 			var result map[string]json.RawMessage
 			result, err = tx.client.Request(ctx, "/v1/user/get-change-device-verify",
@@ -549,6 +617,7 @@ func (m *Manager) run(tx *transaction, in Input, phone map[string]any, key, orig
 			return
 		}
 	case "sms_request", "sms_resend":
+		stage = "login_sms"
 		resend = time.Now().Add(60 * time.Second)
 		if in.Action == "sms_request" {
 			number, _ := strconv.ParseInt(in.Account, 10, 64)
@@ -573,10 +642,12 @@ func (m *Manager) run(tx *transaction, in Input, phone map[string]any, key, orig
 		nextPhone, nextOriginal, state = phone, original, "sms_required"
 		return
 	case "sms_verify":
+		stage = "sms_login"
 		state = "sms_required"
 		err = tx.client.Login(ctx, map[string]any{"phone": phone, "key": key, "verificationCode": in.Code,
 			"validateStr": in.Captcha, "type": "LOGIN_TYPE_SMS"})
 	case "security_verify":
+		stage = "security_verification"
 		state, retry = "security_required", time.Now().Add(time.Second)
 		err = tx.client.VerifySecurity(ctx, in.Code)
 	case "retry_finish":
@@ -590,6 +661,10 @@ func (m *Manager) run(tx *transaction, in Input, phone map[string]any, key, orig
 		return
 	}
 	state = "connection_pending"
+	stage = "im_credentials"
+	if m.mobile {
+		stage = "business_credentials"
+	}
 	var saved Session
 	saved, nickname, err = tx.client.Finish(ctx)
 	if err != nil {
@@ -599,6 +674,7 @@ func (m *Manager) run(tx *transaction, in Input, phone map[string]any, key, orig
 		err = rejection("native_auth_expired")
 		return
 	}
+	stage = "session_save"
 	err = tx.commit(ctx, saved, nickname)
 	if err != nil {
 		return

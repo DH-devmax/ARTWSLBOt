@@ -39,16 +39,12 @@ func nativeFailure(err error) error {
 }
 
 func (s *Server) nativeRequestIDs(version int64) nativeauth.RequestIDSource {
-	return func(ctx context.Context, current bool, now uint64) (uint64, error) {
+	return func(ctx context.Context, now uint64) (uint64, error) {
 		if now > 1<<63-2 {
 			return 0, &nativeauth.Error{Code: "native_request_id_exhausted"}
 		}
 		statement := `UPDATE native_deployment SET request_id_ns=GREATEST(request_id_ns+1,$1)
             WHERE singleton AND version=$2 AND request_id_ns<9223372036854775807 RETURNING request_id_ns`
-		if current {
-			statement = `UPDATE native_deployment SET request_id_ms=GREATEST(request_id_ms+1,$1)
-                WHERE singleton AND version=$2 AND request_id_ms<9223372036854775807 RETURNING request_id_ms`
-		}
 		var id int64
 		err := s.DB.Platform.QueryRow(ctx, statement, int64(now), version).Scan(&id)
 		if err == pgx.ErrNoRows {
@@ -78,6 +74,9 @@ func (s *Server) loadNativeDeployment(ctx context.Context) (nativeauth.Deploymen
 	defer clear(plain)
 	deployment, err := nativeauth.ParseDeployment(plain)
 	if err != nil {
+		if err.Error() == "native_desktop_required" {
+			return nativeauth.Deployment{}, version, fail(409, "native_desktop_configuration_required")
+		}
 		return nativeauth.Deployment{}, 0, fail(503, "native_deployment_invalid")
 	}
 	return deployment, version, nil
@@ -88,13 +87,23 @@ func (s *Server) nativeDeployment(w http.ResponseWriter, r *http.Request, p Prin
 	if err != nil {
 		var api *apiError
 		if errors.As(err, &api) && api.code == "native_deployment_missing" {
-			send(w, 200, map[string]any{"configured": false, "version": 0, "crypto_ready": nativewire.Available()})
+			send(w, 200, map[string]any{"configured": false, "version": 0, "crypto_ready": nativewire.Available(),
+				"login_adapter": "desktop", "supported_protocol": nativeauth.DesktopProtocolVersion})
+			return nil
+		}
+		if errors.As(err, &api) && api.code == "native_desktop_configuration_required" {
+			send(w, 200, map[string]any{"configured": false, "version": version, "crypto_ready": nativewire.Available(),
+				"login_adapter": "desktop", "supported_protocol": nativeauth.DesktopProtocolVersion,
+				"migration_required": true})
 			return nil
 		}
 		return err
 	}
 	send(w, 200, map[string]any{"configured": true, "version": version, "origin": d.Origin,
-		"protocol_version": d.ProtocolVersion, "crypto_ready": nativewire.Available()})
+		"protocol_version": d.ProtocolVersion, "crypto_ready": nativewire.Available(),
+		"auth_diagnostic_version": nativeauth.AuthDiagnosticVersion,
+		"login_adapter":           "desktop", "supported_protocol": nativeauth.DesktopProtocolVersion,
+		"device": nativeauth.DescribeDevice(d)})
 	return nil
 }
 
@@ -108,6 +117,9 @@ func (s *Server) saveNativeDeployment(w http.ResponseWriter, r *http.Request, p 
 	}
 	d, err := nativeauth.ParseDeployment([]byte(in.Configuration))
 	if err != nil {
+		if err.Error() == "native_desktop_required" {
+			return fail(400, "native_desktop_required")
+		}
 		return fail(400, "native_deployment_invalid")
 	}
 	canonical, err := json.Marshal(d)
@@ -141,7 +153,7 @@ func (s *Server) saveNativeDeployment(w http.ResponseWriter, r *http.Request, p 
 		return err
 	}
 	if _, err = tx.Exec(r.Context(), `UPDATE accounts SET auth_state='reauth_required',epoch=epoch+1,version=version+1
-        WHERE credential_sealed IS NOT NULL`); err != nil {
+        WHERE platform='wsl' AND credential_sealed IS NOT NULL`); err != nil {
 		return err
 	}
 	if err = auditTx(r.Context(), tx, p, "", "native_deployment_updated", "platform",
@@ -184,6 +196,9 @@ func (s *Server) startNativeAuth(w http.ResponseWriter, r *http.Request, p Princ
 	}
 	if connected {
 		return fail(409, "native_disconnect_before_login")
+	}
+	if s.NativeMobile.ActiveAccount(account) {
+		return fail(409, "native_auth_account_busy")
 	}
 	var unresolved bool
 	if err = s.DB.Platform.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM native_signup_attempts
@@ -313,6 +328,25 @@ func (s *Server) forgetNativeSession(w http.ResponseWriter, r *http.Request, p P
 		return err
 	}
 	defer tx.Rollback(r.Context())
+	var nativePlatform string
+	if err = tx.QueryRow(r.Context(), `SELECT platform FROM accounts WHERE id=$1 FOR UPDATE`,
+		r.PathValue("id")).Scan(&nativePlatform); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fail(404, "account_not_found")
+		}
+		return err
+	}
+	if nativePlatform == "lajiaoliao" {
+		var inProgress bool
+		if err = tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM lajiaoliao_auth_state
+            WHERE account_id=$1 AND state='submitting' AND attempted_at>now()-interval '1 minute')`,
+			r.PathValue("id")).Scan(&inProgress); err != nil {
+			return err
+		}
+		if inProgress {
+			return fail(409, "native_login_in_progress")
+		}
+	}
 	tag, err := tx.Exec(r.Context(), `UPDATE accounts SET credential_sealed=NULL,auth_state='not_authenticated',
         authenticated_at=NULL,version=version+1,epoch=epoch+1
         WHERE id=$1 AND version=$2 AND NOT connection_enabled AND NOT EXISTS(
@@ -323,6 +357,11 @@ func (s *Server) forgetNativeSession(w http.ResponseWriter, r *http.Request, p P
 	if tag.RowsAffected() != 1 {
 		return fail(409, "version_conflict")
 	}
+	if _, err = tx.Exec(r.Context(), `UPDATE lajiaoliao_auth_state SET state='ready',error='',version=version+1,
+        sms_phone_sealed=NULL,sms_expires_at=NULL,sms_session_hash=NULL,sms_actor_id=NULL
+        WHERE account_id=$1`, r.PathValue("id")); err != nil {
+		return err
+	}
 	if err = auditTx(r.Context(), tx, p, "", "native_session_forgotten", r.PathValue("id"),
 		map[string]any{"previous_version": in.Version, "at": time.Now().UTC()}); err != nil {
 		return err
@@ -331,6 +370,7 @@ func (s *Server) forgetNativeSession(w http.ResponseWriter, r *http.Request, p P
 		return err
 	}
 	s.Native.CancelAccount(r.PathValue("id"))
+	s.NativeMobile.CancelAccount(r.PathValue("id"))
 	send(w, 200, map[string]bool{"forgotten": true})
 	return nil
 }

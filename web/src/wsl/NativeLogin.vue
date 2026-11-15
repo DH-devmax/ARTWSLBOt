@@ -2,9 +2,11 @@
   <ElDialog
     :model-value="modelValue"
     :title="
-      currentAccount
-        ? `${currentAccount.name} · 注册 / 登录`
-        : `添加${workspace === 'maibot' ? '热群' : '旺商聊'}机器人`
+      mobileSearch
+        ? `${currentAccount?.name || '旺商聊'} · 手机搜索认证`
+        : currentAccount
+          ? `${currentAccount.name} · 注册 / 登录`
+          : `添加${workspace === 'maibot' ? '热群' : '旺商聊'}机器人`
     "
     class="native-auth-dialog"
     width="560px"
@@ -13,13 +15,17 @@
     :close-on-click-modal="false"
     :close-on-press-escape="!busy"
     @update:model-value="emit('update:modelValue', $event)"
-    @close="clearInput"
   >
-    <ElTabs v-model="purpose" :before-leave="prepareSwitch" class="native-auth-tabs">
+    <ElTabs
+      v-if="!mobileSearch"
+      v-model="purpose"
+      :before-leave="prepareSwitch"
+      class="native-auth-tabs"
+    >
       <ElTabPane label="原生登录" name="login" :disabled="locked" />
       <ElTabPane label="新账号注册" name="signup" :disabled="locked || !canSignup" />
     </ElTabs>
-    <p v-if="!canSignup && !signup" class="password-policy">
+    <p v-if="!mobileSearch && !canSignup && !signup" class="password-policy">
       已绑定身份、已注册或开户结果待复核的账号面板不能再次注册。
     </p>
     <ElAlert
@@ -31,8 +37,21 @@
       class="flow-alert"
     />
     <ElAlert
-      v-if="!deployment.configured"
-      title="尚未导入原生协议配置"
+      v-if="mobileSearch && !mobileAccountAllowed"
+      :title="errorText('native_mobile_account_unavailable')"
+      type="warning"
+      :closable="false"
+      class="flow-alert"
+    />
+    <ElAlert
+      v-else-if="!deployment.configured"
+      :title="
+        mobileSearch
+          ? '尚未导入手机搜索协议配置'
+          : deployment.migration_required
+            ? '移动端接入已移除，请先导入桌面端协议配置'
+            : '尚未导入桌面端协议配置'
+      "
       type="warning"
       :closable="false"
       class="flow-alert"
@@ -48,17 +67,30 @@
       <ElTag :type="terminal ? 'success' : 'info'">{{ statusLabel }}</ElTag>
       <span v-if="flow.transaction_id && !terminal">本次验证 {{ expirySeconds }} 秒后过期</span>
     </div>
+    <ElAlert
+      v-if="deployment.configured"
+      :title="mobileSearch ? '独立手机搜索会话' : '桌面端接入'"
+      :description="
+        mobileSearch
+          ? '仅为此机器人保存业务搜索会话，与桌面消息接收独立。登录和短信均需本人手动提交。'
+          : '仅使用桌面业务协议；消息连接使用 Web IM。多端同时在线仍需独立验收。'
+      "
+      type="info"
+      :closable="false"
+      class="flow-alert"
+    />
     <ElDescriptions v-if="flow.status === 'authenticated'" :column="1" border>
       <ElDescriptionsItem label="原生 UID">{{ flow.native_uid }}</ElDescriptionsItem>
       <ElDescriptionsItem label="昵称">{{ flow.nickname || '—' }}</ElDescriptionsItem>
-      <ElDescriptionsItem label="消息接收">尚未连接</ElDescriptionsItem>
+      <ElDescriptionsItem v-if="mobileSearch" label="业务搜索会话">已保存</ElDescriptionsItem>
+      <ElDescriptionsItem v-else label="消息接收">尚未连接</ElDescriptionsItem>
     </ElDescriptions>
-    <ElDescriptions v-else-if="flow.status === 'registered'" :column="1" border>
+    <ElDescriptions v-else-if="!mobileSearch && flow.status === 'registered'" :column="1" border>
       <ElDescriptionsItem label="旺商聊账号">{{ flow.registered_account }}</ElDescriptionsItem>
       <ElDescriptionsItem label="登录状态">尚未登录</ElDescriptionsItem>
     </ElDescriptions>
     <ElForm v-else-if="ready" label-position="top" @submit.prevent="submit">
-      <ElFormItem v-if="!currentAccount" label="机器人名称">
+      <ElFormItem v-if="!mobileSearch && !currentAccount" label="机器人名称">
         <ElInput v-model="robotName" maxlength="100" autocomplete="off" :disabled="locked" />
       </ElFormItem>
       <template v-if="signup && ['pending', 'failed', 'signup_sms_required'].includes(flow.status)">
@@ -71,9 +103,7 @@
             :disabled="busy"
           />
         </ElFormItem>
-        <ElFormItem label="昵称">
-          <ElInput v-model="nickname" autocomplete="off" maxlength="20" :disabled="busy" />
-        </ElFormItem>
+        <p class="password-policy">原生昵称不在此注册步骤设置，机器人名称仅为网站备注。</p>
         <template v-if="flow.status === 'signup_sms_required'">
           <ElFormItem label="注册短信验证码">
             <ElInput
@@ -186,7 +216,7 @@
         >取消验证</ElButton
       >
       <ElButton
-        v-if="flow.status === 'registered'"
+        v-if="!mobileSearch && flow.status === 'registered'"
         type="primary"
         :disabled="locked"
         @click="loginRegistered"
@@ -197,6 +227,7 @@
           !terminal &&
           (expired ||
             ['cancelled', 'expired', 'unknown'].includes(flow.status) ||
+            (mobileSearch && flow.status === 'connection_pending') ||
             (currentAccount &&
               !flow.transaction_id &&
               deployment.configured &&
@@ -218,18 +249,38 @@
   import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
   import { Key } from '@element-plus/icons-vue'
   import { api as request, ApiError, errorText, type Row } from './api'
+  import { nativeCaptcha } from './nativeCaptcha'
 
-  const props = defineProps<{
-    modelValue: boolean
-    account: Row | null
-    owner: string
-    workspace: 'wsl' | 'maibot'
-  }>()
+  const props = withDefaults(
+    defineProps<{
+      modelValue: boolean
+      account: Row | null
+      owner: string
+      workspace: import('./workspaces').Workspace
+      adapter?: 'desktop' | 'mobile_search'
+    }>(),
+    { adapter: 'desktop' }
+  )
   const emit = defineEmits<{ 'update:modelValue': [boolean]; updated: []; created: [Row] }>()
   const api = <T,>(path: string, method = 'GET', body?: unknown) =>
     request<T>(path, method, body, undefined, props.workspace)
+  const mobileSearch = computed(() => props.adapter === 'mobile_search')
+  const mobileAccountAllowed = computed(
+    () =>
+      !!props.account?.id &&
+      props.account.platform === 'wsl' &&
+      props.account.purpose === 'management' &&
+      props.account.auth_state === 'authenticated' &&
+      props.workspace === 'wsl'
+  )
+  const authPath = (id: string) =>
+    `/accounts/${id}/${mobileSearch.value ? 'native-mobile-auth' : 'native-auth'}`
+  const deploymentPath = () =>
+    mobileSearch.value ? '/native-mobile-deployment' : '/native-deployment'
   const createdAccount = ref<Row | null>(null)
-  const currentAccount = computed(() => props.account || createdAccount.value)
+  const currentAccount = computed(
+    () => props.account || (mobileSearch.value ? null : createdAccount.value)
+  )
   const robotName = ref('')
   const handles = new Map<string, string>()
   const flow = ref<Row>({}),
@@ -240,7 +291,6 @@
     method = ref('password')
   const nativeAccount = ref(''),
     password = ref(''),
-    nickname = ref(''),
     agreed = ref(false),
     code = ref(''),
     error = ref(''),
@@ -249,23 +299,31 @@
   const captchaHost = ref<HTMLElement>()
   let generation = 0,
     polling = false,
-    captcha: any
-  let scriptPromise: Promise<void> | undefined
-  const signup = computed(() => purpose.value === 'signup')
+    verification: AbortController | undefined,
+    timer: ReturnType<typeof setInterval> | undefined
+  const signup = computed(() => !mobileSearch.value && purpose.value === 'signup')
   const locked = computed(() => initializing.value || busy.value || flow.value.status === 'working')
   const canSignup = computed(
     () =>
+      !mobileSearch.value &&
       !panel.value.native_uid &&
       !panel.value.connection_enabled &&
       !['submitted', 'registered'].includes(panel.value.signup_state) &&
       (!currentAccount.value || panel.value.auth_state === 'not_authenticated') &&
       !['authenticated', 'registered'].includes(flow.value.status)
   )
-  const terminal = computed(() => ['authenticated', 'registered'].includes(flow.value.status))
+  const terminal = computed(
+    () =>
+      flow.value.status === 'authenticated' ||
+      (!mobileSearch.value && flow.value.status === 'registered')
+  )
   const signupPasswordCharacters = new Set(
     "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ×÷`¬!£$%^*()~=#{}[];':,./?-_+<>@&"
   )
-  const scope = () => `${props.owner}:${props.workspace}:${currentAccount.value?.id || 'new'}`
+  const scope = () =>
+    `${props.owner}:${props.workspace}:${props.adapter}:${
+      mobileSearch.value ? `${props.account?.version}:${deployment.value.version}:` : ''
+    }${currentAccount.value?.id || 'new'}`
   const seconds = (value: string) =>
     Math.max(0, Math.ceil((Date.parse(value) - now.value) / 1000)) || 0
   const retrySeconds = computed(() => seconds(flow.value.retry_at))
@@ -283,6 +341,7 @@
   const ready = computed(
     () =>
       !initializing.value &&
+      (!mobileSearch.value || mobileAccountAllowed.value) &&
       deployment.value.configured &&
       deployment.value.crypto_ready &&
       (!!flow.value.transaction_id || !currentAccount.value)
@@ -306,21 +365,62 @@
     const details: Record<string, string> = {
       network_timeout: '网络请求超时，未取得可核验的上游结果。',
       connection_closed: '上游连接提前关闭，未取得可核验的结果。',
-      network_unavailable: '连接未正常完成，无法确认上游是否处理了请求。'
+      network_unavailable: '连接未正常完成，无法确认上游是否处理了请求。',
+      login_identity_invalid: '手机响应缺少有效的原生身份或登录凭据，未保存会话。',
+      login_account_mismatch: '手机响应的可搜索账号与本次填写账号不一致，未保存会话。',
+      login_phone_invalid: '手机响应的手机号资料格式无法核验，未保存会话。',
+      login_phone_mismatch: '手机响应的完整手机号与本次填写手机号不一致，未保存会话。',
+      login_security_flags_invalid: '手机响应的安全验证状态格式无效，未保存会话。',
+      provider_code_classified: '原因依据：已核对的业务错误码定义。',
+      provider_reason_classified: '原因依据：上游明确原因文案的安全分类，未展示原文。',
+      provider_reason_empty: '上游原因文本为空，不能据此判断号码或号段是否受限。',
+      provider_reason_unrecognized:
+        '上游返回了原因文本，但尚未匹配到安全分类；原文已隐藏，不能据此判断号段限制。',
+      provider_reason_nontext: '上游原因不是文本，已保留业务码；内容未展示，不能据此判断号段限制。',
+      provider_reason_oversized:
+        '上游原因超过安全分类长度，已保留业务码；内容未展示，不能据此判断号段限制。'
     }
-    return (
-      details[flow.value.diagnostic] ||
-      (flow.value.provider_code ? `上游返回码：${flow.value.provider_code}` : '')
-    )
+    const stages: Record<string, string> = {
+      password_login: '失败阶段：密码登录',
+      device_verification: '失败阶段：换设备验证',
+      login_sms: '失败阶段：登录短信',
+      sms_login: '失败阶段：短信登录',
+      security_verification: '失败阶段：安全码验证',
+      business_credentials: '失败阶段：读取业务搜索凭据',
+      im_credentials: mobileSearch.value
+        ? '失败阶段：保存业务搜索会话'
+        : '失败阶段：取得消息连接凭据（前面的身份验证已完成）',
+      session_save: '失败阶段：保存本地会话（上游已返回登录凭据）',
+      signup_sms: '失败阶段：注册短信',
+      signup_submit: '失败阶段：原生注册',
+      signup_record: '失败阶段：保存注册结果'
+    }
+    return [
+      stages[flow.value.failure_stage],
+      details[flow.value.diagnostic],
+      flow.value.provider_code ? `上游返回码：${flow.value.provider_code}` : '',
+      flow.value.diagnostic_version ? `诊断版本：${flow.value.diagnostic_version}` : '',
+      flow.value.failure_stage === 'signup_sms' && !flow.value.diagnostic
+        ? '此条结果未包含原因分类，无法判断上游原因是否为空；不会自动重发。'
+        : ''
+    ]
+      .filter(Boolean)
+      .join('；')
   })
   const statusLabel = computed(() =>
     initializing.value
       ? '正在准备验证'
       : expired.value && !terminal.value
         ? '已过期'
-        : signup.value && flow.value.status === 'pending'
-          ? '等待注册'
-          : statuses[flow.value.status] || '未开始'
+        : mobileSearch.value && flow.value.status === 'authenticated'
+          ? '业务搜索会话已保存'
+          : mobileSearch.value && flow.value.status === 'connection_pending'
+            ? '业务搜索会话尚未保存'
+            : signup.value && flow.value.status === 'pending'
+              ? '等待注册'
+              : signup.value && flow.value.status === 'failed'
+                ? '注册未完成'
+                : statuses[flow.value.status] || '未开始'
   )
   const submitLabel = computed(() => {
     if (signup.value)
@@ -330,7 +430,7 @@
       failed: method.value === 'sms' ? '验证并发送短信' : '验证并登录',
       sms_required: '验证短信并登录',
       security_required: '提交安全码',
-      connection_pending: '重试取得 IM 凭据'
+      connection_pending: mobileSearch.value ? '重试保存搜索会话' : '重试取得 IM 凭据'
     }
     return labels[flow.value.status] || '提交'
   })
@@ -338,28 +438,31 @@
     password.value = ''
     code.value = ''
     nativeAccount.value = ''
-    nickname.value = ''
     agreed.value = false
-    captcha?.destroy?.()
-    captcha = undefined
+    verification?.abort()
+    verification = undefined
     busy.value = false
   }
   function endpoint() {
-    return `/accounts/${currentAccount.value?.id}/native-auth/${flow.value.transaction_id}`
+    return `${authPath(currentAccount.value?.id)}/${flow.value.transaction_id}`
   }
   async function initialize(current: number, target = purpose.value, restore = true) {
     if (!props.owner) return false
-    const originalScope = scope(),
-      accountID = currentAccount.value?.id
+    if (mobileSearch.value && (!mobileAccountAllowed.value || target !== 'login')) {
+      error.value = errorText('native_mobile_account_unavailable')
+      return false
+    }
+    const accountID = currentAccount.value?.id
     initializing.value = true
     error.value = ''
     try {
       const [config, accounts] = await Promise.all([
-        api<Row>('/native-deployment'),
+        api<Row>(deploymentPath()),
         api<Row[]>('/accounts')
       ])
       if (current !== generation) return false
       deployment.value = config
+      const originalScope = scope()
       if (!accountID) {
         panel.value = {}
         flow.value = { status: 'pending' }
@@ -367,13 +470,24 @@
       }
       const account = accounts.find((a) => a.id === accountID)
       if (!account) throw new Error('账号不存在')
+      if (
+        mobileSearch.value &&
+        (account.platform !== 'wsl' ||
+          account.purpose !== 'management' ||
+          account.auth_state !== 'authenticated')
+      )
+        throw new Error(errorText('native_mobile_account_unavailable'))
       panel.value = account
       if (!config.configured || !config.crypto_ready) return true
       const id = restore ? handles.get(originalScope) : undefined
       if (id) {
         try {
-          const value = await api<Row>(`/accounts/${accountID}/native-auth/${id}`)
+          const value = await api<Row>(`${authPath(accountID)}/${id}`)
           if (current !== generation) return false
+          if (mobileSearch.value && value.purpose === 'signup') {
+            handles.delete(originalScope)
+            return initialize(current, 'login', false)
+          }
           purpose.value = value.purpose === 'signup' ? 'signup' : 'login'
           flow.value = value
           if (purpose.value === 'login')
@@ -386,7 +500,7 @@
         }
       }
       const value = await api<Row>(
-        target === 'signup' ? '/native-signup' : `/accounts/${account.id}/native-auth`,
+        target === 'signup' ? '/native-signup' : authPath(account.id),
         'POST',
         {
           version: account.version,
@@ -408,6 +522,7 @@
     return false
   }
   async function prepareSwitch(name: string | number) {
+    if (mobileSearch.value && name !== 'login') return false
     if (name === purpose.value) return true
     if (locked.value || (name === 'signup' && !canSignup.value)) return false
     if (flow.value.status === 'unknown') {
@@ -424,7 +539,14 @@
     if (await prepareSwitch('login')) purpose.value = 'login'
   }
   watch(
-    () => [props.modelValue, props.account?.id, props.owner, props.workspace],
+    () => [
+      props.modelValue,
+      props.account?.id,
+      props.owner,
+      props.workspace,
+      props.adapter,
+      mobileSearch.value ? props.account?.version : undefined
+    ],
     () => {
       const current = ++generation
       clearInput()
@@ -435,6 +557,15 @@
       deployment.value = {}
       panel.value = props.account || {}
       purpose.value = 'login'
+      clearInterval(timer)
+      timer = undefined
+      now.value = Date.now()
+      if (props.modelValue) {
+        timer = setInterval(() => {
+          if (!verification) now.value = Date.now()
+          void poll()
+        }, 1000)
+      }
       if (props.modelValue) void initialize(current, 'login')
     }
   )
@@ -460,10 +591,6 @@
       polling = false
     }
   }
-  const timer = setInterval(() => {
-    now.value = Date.now()
-    void poll()
-  }, 1000)
   onUnmounted(() => {
     generation++
     clearInterval(timer)
@@ -503,13 +630,29 @@
   }
   async function send(action: string) {
     if (locked.value) return
+    if (
+      mobileSearch.value &&
+      (!mobileAccountAllowed.value ||
+        !flow.value.transaction_id ||
+        ![
+          'password',
+          'sms_request',
+          'sms_resend',
+          'sms_verify',
+          'security_verify',
+          'retry_finish'
+        ].includes(action))
+    ) {
+      error.value = errorText('native_mobile_account_unavailable')
+      return
+    }
     if (!currentAccount.value && !robotName.value.trim()) {
       error.value = '请填写机器人名称'
       return
     }
     if (signup.value) {
-      if (!agreed.value || !nickname.value.trim()) {
-        error.value = '请填写昵称并确认旺商聊协议与手机号授权'
+      if (!agreed.value) {
+        error.value = '请确认旺商聊协议与手机号授权'
         return
       }
       if (action === 'signup_sms' && !/^1[0-9]{10}$/.test(nativeAccount.value)) {
@@ -544,7 +687,7 @@
       account: nativeAccount.value,
       password: action === 'password' || action === 'signup_submit' ? password.value : '',
       code: code.value,
-      ...(signup.value ? { nickname: nickname.value, agreed: agreed.value } : {})
+      ...(signup.value ? { agreed: agreed.value } : {})
     }
     busy.value = true
     error.value = ''
@@ -611,83 +754,28 @@
       return
     }
     try {
-      const browser = window as any
-      if (!browser.initNECaptcha) {
-        scriptPromise ??= new Promise<void>((resolve, reject) => {
-          const script = document.createElement('script')
-          script.src = 'https://cstaticdun.126.net/load.min.js'
-          script.async = true
-          const timeout = setTimeout(() => {
-            script.remove()
-            reject(new Error('人机验证加载超时'))
-          }, 15000)
-          script.onload = () => {
-            clearTimeout(timeout)
-            resolve()
-          }
-          script.onerror = () => {
-            clearTimeout(timeout)
-            script.remove()
-            reject(new Error('人机验证加载失败'))
-          }
-          document.head.append(script)
-        }).catch((e) => {
-          scriptPromise = undefined
-          throw e
-        })
-        await scriptPromise
-      }
-      if (current !== generation) return
-      captcha?.destroy?.()
       await nextTick()
-      browser.initNECaptcha(
-        {
-          captchaId: flow.value.captcha_id,
-          // SDK v2 uses element as the popup container, not just a form anchor.
-          element: captchaHost.value,
-          mode: 'popup',
-          width: `${Math.max(1, Math.min(320, (window.visualViewport?.width || window.innerWidth) - 64))}px`,
-          apiVersion: 2,
-          onClose: () => {
-            if (!consumed) {
-              consumed = true
-              if (current === generation) busy.value = false
-              input.password = ''
-              input.code = ''
-            }
-          },
-          onVerify: (failure: unknown, data: { validate: string }) => {
-            if (current !== generation || consumed) return
-            if (failure || !data?.validate) {
-              error.value = '人机验证未通过'
-              return
-            }
-            void post(data.validate)
-          }
-        },
-        (instance: any) => {
-          if (current !== generation) {
-            instance.destroy?.()
-            return
-          }
-          captcha = instance
-          instance.verify()
-        },
+      if (current !== generation || !captchaHost.value) return
+      const controller = new AbortController()
+      verification = controller
+      const validate = await nativeCaptcha(
+        captchaHost.value,
+        flow.value.captcha_id,
+        controller.signal,
         () => {
-          consumed = true
-          input.password = ''
-          input.code = ''
-          if (current === generation) {
-            error.value = '人机验证初始化失败'
-            busy.value = false
-          }
+          if (current === generation) error.value = '人机验证未通过'
         }
       )
+      if (verification === controller) verification = undefined
+      now.value = Date.now()
+      await post(validate)
     } catch (e) {
       consumed = true
       input.password = ''
       input.code = ''
       if (current === generation) {
+        verification = undefined
+        now.value = Date.now()
         error.value = (e as Error).message
         busy.value = false
       }

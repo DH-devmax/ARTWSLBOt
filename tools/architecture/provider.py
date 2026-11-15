@@ -14,6 +14,15 @@ PRIVATE = Path.home() / ".config/artwslbot/architecture"
 KEY_FILE = PRIVATE / "provider.key"
 
 
+class ProviderError(ValueError):
+    def __init__(self, reason, http_status=None):
+        self.reason = reason
+        self.http_status = http_status
+        message = f"Provider returned HTTP {http_status}; body suppressed" if http_status else (
+            "Provider request timed out" if reason == "timeout" else "Provider transport failed; details suppressed")
+        super().__init__(message)
+
+
 def private_dir(path):
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     if path.is_symlink() or path.stat().st_mode & 0o077:
@@ -51,15 +60,17 @@ def request(path, body=None):
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     try:
-        with opener.open(req, timeout=45) as response:
+        with opener.open(req, timeout=CONFIG["max_request_seconds"]) as response:
             raw = response.read(2_000_001)
             if len(raw) > 2_000_000:
                 raise ValueError("Provider response exceeds limit")
             return json.loads(raw)
     except urllib.error.HTTPError as exc:
-        raise ValueError(f"Provider returned HTTP {exc.code}; body suppressed") from None
-    except (urllib.error.URLError, TimeoutError):
-        raise ValueError("Provider transport failed; details suppressed") from None
+        raise ProviderError("http_error", exc.code) from None
+    except TimeoutError:
+        raise ProviderError("timeout") from None
+    except urllib.error.URLError as exc:
+        raise ProviderError("timeout" if isinstance(exc.reason, TimeoutError) else "transport") from None
 
 
 def main():

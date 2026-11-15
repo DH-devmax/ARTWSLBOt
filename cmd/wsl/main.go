@@ -5,8 +5,10 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -15,8 +17,11 @@ import (
 	"syscall"
 	"time"
 
+	"wangshangliao/internal/control"
 	"wangshangliao/internal/database"
 	"wangshangliao/internal/httpapi"
+	"wangshangliao/internal/metricsproc"
+	"wangshangliao/internal/monitor"
 	"wangshangliao/internal/security"
 )
 
@@ -29,7 +34,7 @@ func main() {
 
 func run() error {
 	if len(os.Args) != 2 {
-		return errors.New("usage: wsl init|migrate|bootstrap|serve")
+		return errors.New("usage: wsl init|migrate|bootstrap|serve|reconcile-avatar-upload")
 	}
 	if os.Args[1] == "init" || os.Args[1] == "dev-init" {
 		return devInit()
@@ -47,6 +52,9 @@ func run() error {
 		return err
 	}
 	defer db.Close()
+	if os.Args[1] == "reconcile-avatar-upload" {
+		return reconcileAvatarUpload(ctx, db, os.Stdin, os.Stdout)
+	}
 	if os.Args[1] == "bootstrap" {
 		username, password := os.Getenv("BOOTSTRAP_USERNAME"), os.Getenv("BOOTSTRAP_PASSWORD")
 		if len(username) < 3 || len(username) > 80 {
@@ -95,9 +103,40 @@ func run() error {
 		return err
 	}
 	server := httpapi.New(db, vault, origin, os.Getenv("COOKIE_SECURE") == "true")
+	if err = server.Gateway.Recover(ctx); err != nil {
+		return err
+	}
+	billingDone := make(chan struct{})
+	go func() { defer close(billingDone); _ = server.RunBillingMaintenance(ctx) }()
+	defer func() { stop(); <-billingDone }()
+	if err = server.StartAssistant(ctx); err != nil {
+		return err
+	}
+	defer server.StopAssistant()
 	defer server.Native.Close()
+	defer server.NativeMobile.Close()
 	receiverDone := server.RunReceiver(ctx)
 	defer func() { stop(); <-receiverDone }()
+	if err = server.GroupBinding.Recover(ctx); err != nil {
+		return err
+	}
+	bindingDone := server.GroupBinding.Run(ctx)
+	defer func() { stop(); <-bindingDone }()
+	businessDone, err := server.RunBusinessRules(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { stop(); <-businessDone }()
+	heatDone, err := server.RunHeatChat(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { stop(); <-heatDone }()
+	server.ResourceSampler = monitor.NewSampler("api_self", metricsproc.Reader{})
+	monitorDone := server.RunMonitoring(ctx)
+	defer func() { stop(); <-monitorDone }()
+	nativeMaintenanceDone := server.RunNativeMaintenance(ctx)
+	defer func() { stop(); <-nativeMaintenanceDone }()
 	addr := os.Getenv("HTTP_ADDR")
 	if addr == "" {
 		addr = "127.0.0.1:8080"
@@ -107,8 +146,12 @@ func run() error {
 		WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024,
 	}
 	// A process restart never silently replays an operation that may have reached upstream.
-	if _, err = db.Platform.Exec(ctx, `UPDATE operations SET status='unknown',result_code='process_restarted',
-        updated_at=now() WHERE status='running'`); err != nil {
+	if _, err = db.Platform.Exec(ctx, `UPDATE native_setting_operations SET
+        status=CASE WHEN status='submitting' THEN 'unknown' ELSE 'failed' END,
+        result_code='process_restarted',updated_at=now() WHERE status IN ('preparing','submitting')`); err != nil {
+		return err
+	}
+	if err = (&control.NativeTextService{DB: db}).RecoverInterrupted(ctx); err != nil {
 		return err
 	}
 	go func() {
@@ -117,7 +160,7 @@ func run() error {
 		defer cancel()
 		httpServer.Shutdown(shutdown)
 	}()
-	go retention(ctx, db)
+	go retention(ctx, db, server)
 	slog.Info("control plane listening", "address", addr, "native_ready", false, "ai_ready", false)
 	err = httpServer.ListenAndServe()
 	if errors.Is(err, http.ErrServerClosed) {
@@ -126,7 +169,40 @@ func run() error {
 	return err
 }
 
-func retention(ctx context.Context, db *database.DB) {
+func reconcileAvatarUpload(ctx context.Context, db *database.DB, input io.Reader, output io.Writer) error {
+	var in struct {
+		Session   string `json:"session"`
+		Account   string `json:"account"`
+		Operation string `json:"operation"`
+	}
+	reader := json.NewDecoder(io.LimitReader(input, 4097))
+	reader.DisallowUnknownFields()
+	if reader.Decode(&in) != nil || len(in.Session) > 256 || !control.ValidID(in.Account) || !control.ValidID(in.Operation) {
+		return errors.New("invalid avatar reconciliation input")
+	}
+	var extra any
+	if reader.Decode(&extra) != io.EOF {
+		return errors.New("invalid avatar reconciliation input")
+	}
+	ref, err := control.WebsiteSession(in.Session)
+	if err != nil {
+		return errors.New("website session required")
+	}
+	vault, err := security.NewVault(os.Getenv("MASTER_KEY"))
+	if err != nil {
+		return err
+	}
+	work, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	result, err := (&control.NativeSettingsService{DB: db, Vault: vault}).ResolveAvatarUpload(
+		work, ref.InPlatform("lajiaoliao"), in.Account, in.Operation)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(output).Encode(result)
+}
+
+func retention(ctx context.Context, db *database.DB, server *httpapi.Server) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
@@ -139,11 +215,22 @@ func retention(ctx context.Context, db *database.DB) {
                 DELETE FROM claim_codes WHERE expires_at<now()-interval '1 day';
                 UPDATE group_claims SET state='expired' WHERE state='pending' AND created_at<now()-interval '24 hours';
                 UPDATE operations SET status='expired',result_code='deadline_elapsed',updated_at=now()
-                    WHERE status='queued' AND expires_at<now();
+                    WHERE status='queued' AND expires_at<now()
+                    AND NOT EXISTS(SELECT 1 FROM native_text_attempts t WHERE t.operation_id=operations.id);
                 UPDATE operations SET payload_sealed=NULL WHERE created_at<now()-interval '7 days' AND payload_sealed IS NOT NULL;
+                UPDATE native_setting_operations SET payload_sealed=NULL WHERE created_at<now()-interval '7 days' AND payload_sealed IS NOT NULL;
+                DELETE FROM native_security_flows WHERE expires_at<now();
+                UPDATE lajiaoliao_auth_state SET sms_phone_sealed=NULL,sms_session_hash=NULL,
+                    sms_actor_id=NULL,sms_expires_at=NULL
+                    WHERE sms_phone_sealed IS NOT NULL AND
+                    (sms_expires_at<=now() OR sms_expires_at IS NULL AND attempted_at<now()-interval '10 minutes');
+                DELETE FROM native_setting_operations WHERE created_at<now()-interval '90 days' AND status IN ('succeeded','failed');
                 UPDATE inbox SET payload_sealed=NULL,state=CASE WHEN state IN('pending','unresolved') THEN 'quarantined' ELSE state END
                     WHERE received_at<now()-interval '7 days' AND payload_sealed IS NOT NULL;
                 DELETE FROM native_received_events WHERE received_at<now()-interval '7 days';`)
+			if err == nil {
+				err = server.Assistant.Retain(work)
+			}
 			cancel()
 			if err != nil {
 				slog.Error("retention failed", "code", "database_error")
@@ -211,8 +298,7 @@ ENABLE_NATIVE=false
 		return fmt.Errorf("refusing to overwrite .env: %w", err)
 	}
 	if _, err = f.WriteString(content); err != nil {
-		f.Close()
-		return err
+		return errors.Join(err, f.Close())
 	}
 	if err = f.Close(); err != nil {
 		return err

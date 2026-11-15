@@ -6,11 +6,11 @@ flowchart TB
   nc7640b433d9a["service:heatbot (generation disabled)"]
   n3a14a9b688c7["service:migrate (one-shot)"]
   n2235405d4693["service:postgres"]
-  n716d8243c64d["service:simon"]
   n8d8bbb52a41a["service:web"]
+  nfe5f9eb6769e -->|"fixed read-only monitoring"| nc7640b433d9a
   nfe5f9eb6769e -->|"startup dependency"| n3a14a9b688c7
   nfe5f9eb6769e -->|"database endpoint"| n2235405d4693
-  nfe5f9eb6769e -->|"private metrics endpoint"| n716d8243c64d
+  nfe5f9eb6769e -->|"fixed read-only monitoring"| n8d8bbb52a41a
   naaa9670eea76 -->|"startup dependency"| n3a14a9b688c7
   naaa9670eea76 -->|"database endpoint"| n2235405d4693
   n3a14a9b688c7 -->|"database endpoint"| n2235405d4693

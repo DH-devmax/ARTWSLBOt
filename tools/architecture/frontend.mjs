@@ -5,6 +5,13 @@ import { parse, compileTemplate } from '@vue/compiler-sfc'
 
 const root = path.resolve(process.argv[2] || '../..')
 const prefix = 'web/src/wsl/'
+const sharedProductCharts = [
+  'web/src/components/core/charts/art-bar-chart/index.vue',
+  'web/src/components/core/charts/art-ring-chart/index.vue',
+  'web/src/components/core/charts/useChartSurface.ts',
+  'web/src/types/component/chart.ts'
+]
+const productPath = name => name.startsWith(prefix) || sharedProductCharts.includes(name)
 const configPath = path.join(root, 'web/tsconfig.json')
 const { config, error } = ts.readConfigFile(configPath, ts.sys.readFile)
 if (error) throw new Error('Cannot parse frontend tsconfig')
@@ -19,6 +26,13 @@ function walk(dir) {
   }
 }
 walk(path.join(root, prefix))
+for (const name of sharedProductCharts) {
+  const file = path.join(root, name)
+  if (fs.existsSync(file)) {
+    if (fs.lstatSync(file).isSymbolicLink()) throw new Error('Source symlink is not permitted')
+    files.push(file)
+  }
+}
 const nodes = files.map(file => ({ id: path.relative(root, file).split(path.sep).join('/'), kind: 'frontend' }))
 const edges = []
 const gaps = []
@@ -43,7 +57,7 @@ function resolve(from, specifier) {
     return null
   }
   const relative = path.relative(root, resolved).split(path.sep).join('/')
-  return { id: relative, external: !relative.startsWith(prefix) }
+  return { id: relative, external: !productPath(relative) }
 }
 for (const file of files.sort()) {
   const source = fs.readFileSync(file, 'utf8')

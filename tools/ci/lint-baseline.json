@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "tool": "eslint",
+      "file": "web/src/wsl/App.vue",
+      "rule": "@typescript-eslint/no-unused-vars",
+      "code_fingerprint": "1d834e1266236fa6698310b50c7a513122025f400c7e5682a5235f47d1c65339",
+      "count": 1
+    },
+    {
+      "tool": "eslint",
+      "file": "web/src/wsl/MediaComposer.vue",
+      "rule": "@typescript-eslint/no-unused-expressions",
+      "code_fingerprint": "39fd5aa7a1e9512ce8f1cd200913fef4c51959f90e960875a74911c72ec7d6f5",
+      "count": 1
+    },
+    {
+      "tool": "eslint",
+      "file": "web/src/wsl/MobileSearchAccess.vue",
+      "rule": "@typescript-eslint/no-unused-vars",
+      "code_fingerprint": "b1b51a1648c3647273e371dddbc66064174c21c3a43358caa06245f607569b92",
+      "count": 1
+    },
+    {
+      "tool": "eslint",
+      "file": "web/src/wsl/TenantMembers.vue",
+      "rule": "@typescript-eslint/no-unused-vars",
+      "code_fingerprint": "2963072d2a2a5065e0b531985177d1fd4840af4d206be217467326724bcf5212",
+      "count": 1
+    },
+    {
+      "tool": "eslint",
+      "file": "web/src/wsl/nativeCaptcha.ts",
+      "rule": "@typescript-eslint/no-unused-expressions",
+      "code_fingerprint": "d7f21739769c074335a0e7da3daabe747eed301cca8fbe7f64100325f6b56d18",
+      "count": 1
+    },
+    {
+      "tool": "eslint",
+      "file": "web/src/wsl/nativeSettings.ts",
+      "rule": "no-control-regex",
+      "code_fingerprint": "c95b3e70f952eb43ec12650a0854f0089ab08964e276d562e4afb94213d8b1d2",
+      "count": 1
+    },
+    {
+      "tool": "gofmt",
+      "file": "internal/control/gateway_inspection_test.go",
+      "rule": "format",
+      "code_fingerprint": "71bbba3a36de7cbf08cab12549a1762a5fd03c3c466a36ae5e963e6cd6371769",
+      "count": 1
+    },
+    {
+      "tool": "gofmt",
+      "file": "internal/gateway/onboarding_source.go",
+      "rule": "format",
+      "code_fingerprint": "0e593d50990846e1b35e5ec2cd20ba06e6359654852c6a9c1d868bdf8553e48a",
+      "count": 1
+    },
+    {
+      "tool": "gofmt",
+      "file": "internal/httpapi/access.go",
+      "rule": "format",
+      "code_fingerprint": "f8adc28079cee4f7d387040bd688c535d6577dfdb480a54e883e89c697101a08",
+      "count": 1
+    },
+    {
+      "tool": "gofmt",
+      "file": "internal/lajiaoliao/client.go",
+      "rule": "format",
+      "code_fingerprint": "92af193e2156b44550878d96ad100535849fab5e47ca165b61853b14af366f82",
+      "count": 1
+    },
+    {
+      "tool": "prettier",
+      "file": "web/src/wsl/ChiliMessage.vue",
+      "rule": "format",
+      "code_fingerprint": "928f1a3cae9b854e35390861fae6b082b370bdcd580080ca4aa462aa392da5c4",
+      "count": 1
+    },
+    {
+      "tool": "prettier",
+      "file": "web/src/wsl/MessageCenter.vue",
+      "rule": "format",
+      "code_fingerprint": "85e4892b654eb11eebc2b75305ec4eef360e58b39fe3c1bb88bfbbe1d2e3e17e",
+      "count": 1
+    },
+    {
+      "tool": "prettier",
+      "file": "web/src/wsl/MessageComposer.vue",
+      "rule": "format",
+      "code_fingerprint": "e6cdd4f88dfb707a3aeb49a9e0af646b2b4bf97e63ccaab7eddb05b40d285bb3",
+      "count": 1
+    },
+    {
+      "tool": "prettier",
+      "file": "web/src/wsl/MessageImage.vue",
+      "rule": "format",
+      "code_fingerprint": "9fcf14d8f8160bffe0a35a51fd505c68d7a327d35e1babf8fd97e95316787745",
+      "count": 1
+    },
+    {
+      "tool": "prettier",
+      "file": "web/src/wsl/NativeCapabilities.vue",
+      "rule": "format",
+      "code_fingerprint": "4dc865839d0c7bd08f8dbc1f79bb1582c2dc3a3486d80b605017da1aba681e21",
+      "count": 1
+    },
+    {
+      "tool": "prettier",
+      "file": "web/src/wsl/SystemMonitor.vue",
+      "rule": "format",
+      "code_fingerprint": "65dfcf8981ad222bb4675f12d4acb5099379715d2f6485b4dff7f2a5d754f189",
+      "count": 1
+    },
+    {
+      "tool": "prettier",
+      "file": "web/src/wsl/api.ts",
+      "rule": "format",
+      "code_fingerprint": "8474836eafe733ed9f32a43ec066e20b7fb1bda0a34a7bfa16a11bc03b9429d2",
+      "count": 1
+    },
+    {
+      "tool": "prettier",
+      "file": "web/src/wsl/assistant/PlatformAssistant.vue",
+      "rule": "format",
+      "code_fingerprint": "e2842e795183337911b07f664a8da94aadeb6ab14594126b5d79a25552c199df",
+      "count": 1
+    },
+    {
+      "tool": "prettier",
+      "file": "web/src/wsl/assistant/types.ts",
+      "rule": "format",
+      "code_fingerprint": "e68ae42e9e7ef0cbf8369863e3cf2702069188b606d8744b3e288a453c6d0f33",
+      "count": 1
+    },
+    {
+      "tool": "prettier",
+      "file": "web/src/wsl/messageQuote.ts",
+      "rule": "format",
+      "code_fingerprint": "75c60b73470dca1f84a82b98a09730fe888b0e9e9583bc23a05f5ce889a1ea2c",
+      "count": 1
+    },
+    {
+      "tool": "prettier",
+      "file": "web/src/wsl/messageSending.ts",
+      "rule": "format",
+      "code_fingerprint": "a8c7b7d0ef42a1b8930592d80322a3db41700b5f352698be978ff5ffcd29a0cd",
+      "count": 1
+    },
+    {
+      "tool": "prettier",
+      "file": "web/src/wsl/theme/fairweather/DESIGN.md",
+      "rule": "format",
+      "code_fingerprint": "d7b7c608400df9f00a540720f3fe78f42754b6e11b6f674e21b8ff7ccb62b68b",
+      "count": 1
+    },
+    {
+      "tool": "prettier",
+      "file": "web/src/wsl/theme/fairweather/LICENSE.md",
+      "rule": "format",
+      "code_fingerprint": "5e641f85ad66b62ce40a86fb04887688c5dfc859f4eb0faaa3f32054219e3b6f",
+      "count": 1
+    },
+    {
+      "tool": "prettier",
+      "file": "web/src/wsl/theme/lumenwave/DESIGN.md",
+      "rule": "format",
+      "code_fingerprint": "78f7db16ccb5638ebdbbcf8f3b1de6da50258a3d442a5dc2d28deb58a7e59d7b",
+      "count": 1
+    },
+    {
+      "tool": "prettier",
+      "file": "web/src/wsl/theme/lumenwave/LICENSE.md",
+      "rule": "format",
+      "code_fingerprint": "722cf845dc64d4b6ea39761843be0162d83fb777d5cb45d5957bba82d22702c3",
+      "count": 1
+    },
+    {
+      "tool": "prettier",
+      "file": "web/src/wsl/theme/voltline/DESIGN.md",
+      "rule": "format",
+      "code_fingerprint": "5b118faf444a3a806c4f7d9ddff2ee0a9d0408d69e9e3a98291623dc35e0ff50",
+      "count": 1
+    },
+    {
+      "tool": "prettier",
+      "file": "web/src/wsl/theme/voltline/LICENSE.md",
+      "rule": "format",
+      "code_fingerprint": "32855de82d85e3f3f3fb09b762cd7c5ff00da130bee8c07272ac8c780ef0cf39",
+      "count": 1
+    },
+    {
+      "tool": "ruff",
+      "file": "tools/architecture/architecture.py",
+      "rule": "F401",
+      "code_fingerprint": "c517577851c489e45abae2591256c40404a05c6d19cd4d5ae7fd22b0084cec6c",
+      "count": 1
+    },
+    {
+      "tool": "ruff",
+      "file": "tools/native_client_config.py",
+      "rule": "E731",
+      "code_fingerprint": "3b1afd1c5a41b0b7bfdb0ffbc766524d745d790c170328ed4e980a2f77a197c2",
+      "count": 1
+    },
+    {
+      "tool": "ruff",
+      "file": "tools/native_mobile_search_config.py",
+      "rule": "E731",
+      "code_fingerprint": "3148725f1dc34c126927a1e6923dd007375bcfcddcd5b516f19810c311fb5384",
+      "count": 1
+    },
+    {
+      "tool": "ruff",
+      "file": "tools/test_native_client_config.py",
+      "rule": "E731",
+      "code_fingerprint": "ef4f54abee6fc863e3917e73dbbb7f28d06e8fadb3ffb966277d5767ac91346e",
+      "count": 1
+    }
+  ]
+}

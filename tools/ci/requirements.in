@@ -1,0 +1,5 @@
+# Synthetic CI oracles only; no production Python runtime or APK download.
+-r ../architecture/requirements-check.in
+pyelftools==0.33
+PyNaCl==1.6.2
+lz4==4.4.5

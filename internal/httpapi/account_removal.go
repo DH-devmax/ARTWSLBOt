@@ -57,10 +57,13 @@ func readRemovalPreview(r *http.Request, tx pgx.Tx, lock bool) (removalPreview, 
         jsonb_build_object(
           'messages',(SELECT count(*) FROM inbox WHERE account_id=$1),
           'native_events',(SELECT count(*) FROM native_received_events WHERE account_id=$1),
+          'decoded_messages',(SELECT count(*) FROM native_decoded_events WHERE account_id=$1),
+          'native_directory',(SELECT count(*) FROM native_directory_snapshots WHERE account_id=$1),
           'receiver',(SELECT count(*) FROM account_receivers WHERE account_id=$1),
           'memberships',(SELECT count(*) FROM account_groups WHERE account_id=$1),
           'personas',(SELECT count(*) FROM personas WHERE account_id=$1),
           'settings',(SELECT count(*) FROM maibot_settings WHERE account_id=$1),
+          'native_settings',(SELECT count(*) FROM native_setting_operations WHERE account_id=$1),
           'claim_codes',(SELECT count(*) FROM claim_codes WHERE account_id=$1),
           'claims',(SELECT count(*) FROM group_claims WHERE account_id=$1),
           'signup_attempts',(SELECT count(*) FROM native_signup_attempts WHERE account_id=$1),
@@ -76,6 +79,8 @@ func readRemovalPreview(r *http.Request, tx pgx.Tx, lock bool) (removalPreview, 
           'activities',(SELECT count(*) FROM activities WHERE group_id IN
             (SELECT group_id FROM group_bindings WHERE primary_account_id=$1 OR ai_account_id=$1))),
         (SELECT count(*) FROM native_signup_attempts WHERE account_id=$1 AND state='submitted'),
+        (SELECT count(*) FROM native_setting_operations WHERE status IN ('preparing','submitting','unknown')
+          AND (account_id=$1 OR group_id=ANY($2::uuid[]))) +
         (SELECT count(*) FROM operations WHERE status IN ('running','unknown') AND
           (account_id=$1 OR group_id=ANY($2::uuid[]) OR test_window_id IN
             (SELECT id FROM test_windows WHERE account_ids @> ARRAY[$1::uuid])))`,
@@ -254,6 +259,8 @@ func (s *Server) removeAccount(w http.ResponseWriter, r *http.Request, p Princip
 		`DELETE FROM claim_codes WHERE account_id=$1`,
 		`DELETE FROM group_claims WHERE account_id=$1`,
 		`DELETE FROM account_groups WHERE account_id=$1`,
+		`DELETE FROM monitor_minutes WHERE scope='account' AND scope_id=$1::uuid::text`,
+		`DELETE FROM group_assignment_executions WHERE result->>'account_id'=$1::uuid::text`,
 		`DELETE FROM accounts WHERE id=$1`,
 	}
 	for i, statement := range statements {
@@ -273,6 +280,7 @@ func (s *Server) removeAccount(w http.ResponseWriter, r *http.Request, p Princip
         AND NOT EXISTS(SELECT 1 FROM group_claims WHERE group_id=g.id)
         AND NOT EXISTS(SELECT 1 FROM inbox WHERE group_id=g.id)
         AND NOT EXISTS(SELECT 1 FROM operations WHERE group_id=g.id)
+        AND NOT EXISTS(SELECT 1 FROM native_setting_operations WHERE group_id=g.id)
         AND NOT EXISTS(SELECT 1 FROM test_windows WHERE group_id=g.id)`, candidates); err != nil {
 		return err
 	}
@@ -288,6 +296,7 @@ func (s *Server) removeAccount(w http.ResponseWriter, r *http.Request, p Princip
 		s.Receiver.Stop(view.ID)
 	}
 	s.Native.ForgetAccount(view.ID)
+	s.NativeMobile.ForgetAccount(view.ID)
 	send(w, 200, view)
 	return nil
 }

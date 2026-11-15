@@ -21,64 +21,136 @@ import (
 func (m *ReceiverManager) connection(parent context.Context, w *receiverWorker) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	d, saved, key, cursor, err := m.load(ctx, w.spec)
+	d, saved, key, cursor, err := m.connectionSession(ctx, w)
 	if err != nil {
 		return err
 	}
-	// Try the saved IM credential first. Business token renewal is only needed
-	// when the IM server rejects it; it must not delay an otherwise valid socket.
 	t, err := connectIM(ctx, d, saved.Session, key)
-	if err != nil && err.Error() == "im_auth_rejected" && saved.Session.NIMAuthType != 0 {
+	if err != nil {
+		return err
+	}
+	owned := &ownedTextConnection{transport: t, uid: saved.Session.UID, sender: saved.Session.NIMID,
+		version: saved.DeploymentVersion, ctx: ctx}
+	w.mu.Lock()
+	w.connection = owned
+	w.mu.Unlock()
+	defer func() {
+		w.mu.Lock()
+		if w.connection == owned {
+			w.connection = nil
+		}
+		w.mu.Unlock()
+	}()
+	return m.receiveConnection(ctx, w, t, cursor)
+}
+
+func (m *ReceiverManager) connectionSession(ctx context.Context, w *receiverWorker) (nativeauth.Deployment, savedNativeSession, string, string, error) {
+	var d nativeauth.Deployment
+	var saved savedNativeSession
+	var key, cursor string
+	err := m.read(ctx, w.spec.ID, "im_renewal", ReadRenewal, func(work context.Context) error {
+		var err error
+		d, saved, key, cursor, err = m.renewConnectionSession(work, w)
+		return err
+	})
+	if err != nil {
+		return nativeauth.Deployment{}, savedNativeSession{}, "", "", err
+	}
+	return d, saved, key, cursor, err
+}
+
+func (m *ReceiverManager) renewConnectionSession(ctx context.Context, w *receiverWorker) (nativeauth.Deployment, savedNativeSession, string, string, error) {
+	d, saved, key, cursor, err := m.load(ctx, w.spec)
+	if err != nil {
+		return d, saved, "", "", err
+	}
+	// Ephemeral tokens are refreshed once before connecting, as in the pinned
+	// AstrBot adapter. Never reuse a possibly consumed callback/dynamic token.
+	if saved.Session.NIMAuthType != 0 {
 		client, restoreErr := nativeauth.Resume(d, saved.Session, m.IDs(saved.DeploymentVersion))
 		if restoreErr != nil {
-			return restoreErr
+			return d, saved, "", "", restoreErr
 		}
 		fresh, renewErr := client.RenewIM(ctx, saved.Session)
 		client.Close()
 		if renewErr != nil {
-			return renewErr
+			return d, saved, "", "", renewErr
 		}
 		saved.Session = fresh
 		plain, marshalErr := json.Marshal(saved)
 		if marshalErr != nil {
-			return marshalErr
+			return d, saved, "", "", marshalErr
 		}
 		sealed, sealErr := m.Vault.Seal("native-session:"+w.spec.ID, plain)
 		clear(plain)
 		if sealErr != nil {
-			return sealErr
+			return d, saved, "", "", sealErr
 		}
 		tag, saveErr := m.DB.Exec(ctx, `UPDATE accounts a SET credential_sealed=$1 WHERE a.id=$2 AND a.epoch=$3
             AND a.auth_state='authenticated' AND EXISTS(SELECT 1 FROM account_receivers r WHERE r.account_id=a.id
                 AND r.enabled AND r.revision=$4 AND r.owner=$5 AND r.lease_until>now())`,
 			sealed, w.spec.ID, w.spec.Epoch, w.spec.Revision, m.owner)
 		if saveErr != nil || tag.RowsAffected() != 1 {
-			return errors.New("receiver_database_unavailable")
-		}
-		t, err = connectIM(ctx, d, saved.Session, key)
-		if err != nil {
-			return err
+			return d, saved, "", "", errors.New("receiver_database_unavailable")
 		}
 	}
+	return d, saved, key, cursor, nil
+}
+
+func (m *ReceiverManager) receiveConnection(parent context.Context, w *receiverWorker, t *IMTransport, cursor string) error {
+	ctx, cancel := context.WithCancel(parent)
+	connectedAt := time.Now().UTC()
+	w.observe(func(s *ReceiverSnapshot) {
+		s.State, s.Error, s.ConnectedAt = "synchronizing", "", &connectedAt
+		s.SyncedAt, s.HeartbeatAt, s.HeartbeatMS = nil, nil, nil
+	})
+	consumer := make(chan error, 1)
+	synchronized := make(chan struct{})
+	go func() {
+		err := m.consume(ctx, w, t, synchronized)
+		consumer <- err
+		t.close(err)
+	}()
+	defer func() { cancel(); t.close(context.Canceled); <-consumer }()
+	// Drain and commit pushes before the first heartbeat or sync request. Login
+	// may already have delivered more than the bounded queue can retain.
+	duration, err := t.heartbeat(ctx)
 	if err != nil {
 		return err
 	}
-	defer t.close(errors.New("im_disconnected"))
-	now := time.Now().UTC()
-	w.observe(func(s *ReceiverSnapshot) {
-		s.State, s.Error, s.ConnectedAt, s.HeartbeatAt = "connected", "", &now, &now
-	})
-	consumer := make(chan error, 1)
-	go func() { consumer <- m.consume(ctx, w, t) }()
-	defer func() { cancel(); t.close(context.Canceled); <-consumer }()
-	// The consumer is already running; the reader puts this reply in its FIFO.
+	heartbeatAt, ms := time.Now().UTC(), float64(duration.Microseconds())/1000
+	w.observe(func(s *ReceiverSnapshot) { s.HeartbeatAt, s.HeartbeatMS = &heartbeatAt, &ms })
 	body, _ := nativewire.Properties([]nativewire.Property{
 		{Key: 2, Value: []byte(cursor)}, {Key: 7, Value: []byte(cursor)}, {Key: 17, Value: []byte("0")},
 	})
 	reply, err := t.request(ctx, 5, 1, body)
-	if err != nil || reply.Code != 200 || len(reply.Body) != 8 {
+	if err != nil {
+		return err
+	}
+	if reply.Code != 200 || len(reply.Body) != 8 {
 		return nativewire.ErrPushBoundary
 	}
+	// The reply wakes its waiter before the durable consumer necessarily commits.
+	// A socket reply alone must not advertise a synchronized connection.
+	timeout := time.NewTimer(10 * time.Second)
+	defer timeout.Stop()
+	select {
+	case <-synchronized:
+	case err := <-consumer:
+		consumer <- err
+		return err
+	case <-t.done:
+		t.mu.Lock()
+		err := t.err
+		t.mu.Unlock()
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timeout.C:
+		return errors.New("im_sync_timeout")
+	}
+	syncedAt := time.Now().UTC()
+	w.observe(func(s *ReceiverSnapshot) { s.State, s.SyncedAt = "connected", &syncedAt })
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
 	for {
@@ -105,7 +177,8 @@ func (m *ReceiverManager) connection(parent context.Context, w *receiverWorker) 
 	}
 }
 
-func (m *ReceiverManager) consume(ctx context.Context, w *receiverWorker, t *IMTransport) error {
+func (m *ReceiverManager) consume(ctx context.Context, w *receiverWorker, t *IMTransport, synchronized chan<- struct{}) error {
+	synced := false
 	for {
 		var first ReceivedFrame
 		select {
@@ -134,9 +207,18 @@ func (m *ReceiverManager) consume(ctx context.Context, w *receiverWorker, t *IMT
 			}
 		}
 		timer.Stop()
-		w.observe(func(s *ReceiverSnapshot) { s.QueueDepth = len(t.pushes) })
+		w.observe(func(s *ReceiverSnapshot) { s.QueueDepth = len(t.pushes); s.QueueBytes = t.queuedBytes.Load() })
 		if err := m.persistFrames(ctx, w, t, batch); err != nil {
 			return err
+		}
+		if !synced {
+			for _, item := range batch {
+				if item.Frame.Service == 5 && item.Frame.Command == 1 {
+					close(synchronized)
+					synced = true
+					break
+				}
+			}
 		}
 	}
 }
@@ -173,6 +255,7 @@ func (m *ReceiverManager) persistFrames(ctx context.Context, w *receiverWorker, 
 		return err
 	}
 	acks := []ackCandidate{}
+	freshArrivals := []time.Time{}
 	duplicates, total := int64(0), int64(0)
 	boundaryUnknown := false
 	frames := 0
@@ -208,6 +291,8 @@ func (m *ReceiverManager) persistFrames(ctx context.Context, w *receiverWorker, 
 				total++
 				if !fresh {
 					duplicates++
+				} else {
+					freshArrivals = append(freshArrivals, item.At)
 				}
 				acks = append(acks, ackCandidate{message, item.At})
 			}
@@ -230,6 +315,9 @@ func (m *ReceiverManager) persistFrames(ctx context.Context, w *receiverWorker, 
 	if err = tx.Commit(work); err != nil {
 		return errors.New("receiver_database_unavailable")
 	}
+	if total > duplicates && m.WakeDecoder != nil {
+		m.WakeDecoder()
+	}
 	committed := time.Now()
 	committedUTC := committed.UTC()
 	w.observe(func(s *ReceiverSnapshot) {
@@ -246,12 +334,14 @@ func (m *ReceiverManager) persistFrames(ctx context.Context, w *receiverWorker, 
 			second := candidate.At.Unix()
 			bucket := &w.rate[second%60]
 			if bucket.second != second {
-				bucket.second, bucket.count = second, 0
+				bucket.second, bucket.count, bucket.unique = second, 0, 0
 			}
 			bucket.count++
-			w.durable = appendBounded(w.durable, float64(committed.Sub(candidate.At).Microseconds())/1000)
+			w.durable.add(committed, float64(committed.Sub(candidate.At).Microseconds())/1000)
 		}
-		s.DurableP95, s.Samples = percentile(w.durable), len(w.durable)
+		for _, at := range freshArrivals {
+			w.rate[at.Unix()%60].unique++
+		}
 	})
 	if boundaryUnknown {
 		return nativewire.ErrPushBoundary
@@ -300,18 +390,10 @@ func (m *ReceiverManager) ackChunk(ctx context.Context, w *receiverWorker, t *IM
 		w.observe(func(s *ReceiverSnapshot) {
 			s.ACKs++
 			s.LastACK = &nowUTC
-			w.ack = appendBounded(w.ack, float64(now.Sub(candidate.At).Microseconds())/1000)
-			s.ACKP95 = percentile(w.ack)
+			w.ack.add(now, float64(now.Sub(candidate.At).Microseconds())/1000)
 		})
 	}
 	return tx.Commit(work)
-}
-
-func appendBounded(samples []float64, sample float64) []float64 {
-	if len(samples) >= 1024 {
-		samples = samples[1:]
-	}
-	return append(samples, max(0, sample))
 }
 
 func percentile(values []float64) *float64 {

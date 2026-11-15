@@ -1,9 +1,10 @@
 // All account metrics are synthetic. Switching panels must send no writes.
 // prettier-ignore
-async (page) => {
-  const base = 'http://127.0.0.1:5173'
-  if (new URL(page.url()).origin !== base) throw new Error('Local console only')
-  const realMe = (await (await page.request.get(base + '/api/v1/me')).json()).data
+async (page, fixtureMe) => {
+  const base = new URL(page.url()).origin
+  if (new URL(base).hostname !== '127.0.0.1') throw new Error('Local console only')
+  const realMe = fixtureMe || { user: { id: '10000000-0000-4000-8000-000000000099', role: 'superadmin' },
+    permissions: ['overview:read', 'accounts:read', 'groups:read', 'workspaces:maibot'] }
   const original = await page.evaluate(() => Object.fromEntries(Object.entries(sessionStorage).filter(([key]) => key.startsWith('wsl:'))))
   const id = (n) => `50000000-0000-4000-8000-${String(n).padStart(12, '0')}`
   const accounts = [
@@ -12,7 +13,7 @@ async (page) => {
     { id: id(3), name: '聊天甲', workspace: 'maibot' }
   ].map((a) => ({ ...a, auth_state: 'authenticated', connection_enabled: true, runtime_state: 'connected', version: 1 }))
   const now = new Date(), writes = []
-  let fail = false, delay = false, viewer = false, release, entered
+  let fail = false, delay = false, viewer = false, release, entered, httpUnobserved = false
   const delayed = new Promise((resolve) => { release = resolve })
   const seen = new Promise((resolve) => { entered = resolve })
   const snapshot = (account) => {
@@ -30,7 +31,17 @@ async (page) => {
       },
       health: { status: 'attention', reasons: ['unknown_operations', 'runtime_unobserved'] },
       backlog: { status: 'attention', reasons: ['unknown_operations'] },
-      backlog_threshold_seconds: 30, runtime_observed: false
+      backlog_threshold_seconds: 30, runtime_observed: false,
+      ...(!viewer ? {
+        capacity: {bound:count,limit:30,over_capacity:false},
+        http: {observed:!httpUnobserved,queue_depth:1,running:false,http_per_second:0.25,last_wait_ms:3,last_request_ms:8},
+        decode: {pending:2,failed:0,oldest_at:new Date(now-2000).toISOString(),p95_ms:2.5,samples:1000,sampled_at:now.toISOString(),
+          latency: {available:true,p50_ms:1,p95_ms:2.5,p99_ms:8,samples:1000,sample_limit:1000,window_seconds:86400,
+            from:new Date(now-7200000).toISOString(),to:now.toISOString(),histogram:[150,350,400,80,15,5]},
+          diagnostics: {available:true,samples:1000,sample_limit:1000,window_seconds:86400,sampled_at:now.toISOString(),
+            stages:['queue','source_load','vault_json','protocol','projection_seal','persist','service_total']
+              .map((name,i)=>({name,p50_ms:i/10,p95_ms:(i+1)/10,p99_ms:i}))}}
+      } : {})
     }
   }
   const pattern = '**/api/v1/**'
@@ -46,8 +57,17 @@ async (page) => {
     if (path === '/me') data = viewer
       ? { user: { ...realMe.user, role: 'user', tenant_id: id(9) }, permissions: ['overview:read', 'accounts:read'] }
       : realMe
+    else if (path === '/workspaces') data = { items: [{ id: 'user', name: '用户中心' }, { id: 'wsl', name: '旺商聊机器人' }, ...(!viewer ? [{ id: 'maibot', name: '热群机器人' }] : [])] }
     else if (path === '/accounts') data = accounts.filter((a) => a.workspace === workspace)
-    else if (path === '/overview') data = { accounts: 2, groups: 26, limits: { accounts: 10, groups: 100, ai_groups: 100 } }
+    else if (path === '/user-center') data = {
+      subscription:{name:'PRO',active:true,platforms:['wsl'],modules:[],group_limit:30},
+      groups:[],permissions:['overview:read','accounts:read'],personas:[],claims:[],operations:[]
+    }
+    else if (path === '/user-center/groups') data = {items:[],total:0,page:1,page_size:20}
+    else if (path === '/user-center/usage') data = {call_count:0,actual_micro:0,held_micro:0}
+    else if (path === '/overview') data = { accounts: 2, groups: 26, limits: { accounts: 10, groups: 100, ai_groups: 100 },
+      ...(!viewer ? {decode_latency:{available:true,p95_ms:3.25,samples:1000,sample_limit:1000,window_seconds:86400,sampled_at:now.toISOString(),
+      from:new Date(now-7200000).toISOString(),to:now.toISOString(),histogram:[100,200,400,250,40,10]}} : {}) }
     else if (path.endsWith('/dashboard')) {
       const account = accounts.find((a) => path === `/accounts/${a.id}/dashboard` && a.workspace === workspace)
       if (!account) throw new Error('Account request scope mismatch')
@@ -84,14 +104,27 @@ async (page) => {
     await page.goto(base + '/#overview')
     await page.reload()
     await page.getByRole('heading', { name: '群管机器人状态', exact: true }).waitFor()
+    await page.getByRole('heading', { name: '总解码 P95', exact: true }).waitFor()
+    await page.getByText('3.25 ms', { exact: true }).waitFor()
     await choose('群管甲')
     await loaded('群管甲', 7)
     if (await page.getByRole('heading', { name: '验收目标', exact: true }).count() || await page.locator('.overview-grid').count()) throw new Error('Account panel includes platform overview')
-    await dashboard.getByText('19.5 ms', { exact: true }).waitFor()
+    await dashboard.locator('.account-kpis').getByText('2.50 ms', { exact: true }).waitFor()
+    await dashboard.getByText('有效样本 1000 / 1000', {exact:true}).waitFor()
+    if (await dashboard.getByText('解码待处理 / 失败',{exact:true}).isVisible()) throw new Error('Diagnostics must be collapsed initially')
+    await dashboard.getByRole('button', {name:'运行诊断',exact:true}).click()
+    await dashboard.getByText('解码待处理 / 失败', { exact: true }).waitFor()
+    await dashboard.getByText('本次进程分阶段 P95', { exact: true }).waitFor()
+    await dashboard.getByText('密封源读取：0.20 ms', { exact: true }).waitFor()
     await dashboard.getByText('实时连接、心跳与 ACK 尚无监测数据', { exact: true }).waitFor()
+    httpUnobserved = true
+    await dashboard.getByRole('button', { name: '刷新账号指标', exact: true }).click()
+    await dashboard.getByText('未采集 · 状态未观测', { exact: true }).waitFor()
+    httpUnobserved = false
+    await dashboard.getByRole('button', { name: '刷新账号指标', exact: true }).click()
     for (const viewport of [{ width: 320, height: 740 }, { width: 390, height: 844 }, { width: 647, height: 779 }, { width: 1440, height: 960 }]) {
       await page.setViewportSize(viewport)
-      await dashboard.locator('canvas').waitFor()
+      await dashboard.locator('canvas').first().waitFor()
       await page.waitForFunction(() => {
         const chart = document.querySelector('.account-message-chart'), canvas = chart?.querySelector('canvas')
         return canvas && Math.abs(canvas.clientWidth - chart.clientWidth) < 2
@@ -101,7 +134,7 @@ async (page) => {
         const chart = el.querySelector('canvas'), pixels = chart.getContext('2d').getImageData(0, 0, chart.width, chart.height).data
         let colored = 0
         for (let i = 0; i < pixels.length; i += 4) if (pixels[i + 3] && pixels[i + 2] > pixels[i] + 30) colored++
-        const labelsFit = [...el.querySelectorAll('h2,h3,dt,dd,strong')].every((node) => {
+        const labelsFit = [...el.querySelectorAll('h2,h3,dt,dd,strong')].filter(node=>node.getBoundingClientRect().height>0).every((node) => {
           const b = node.getBoundingClientRect()
           return b.left >= -1 && b.right <= innerWidth + 1 && node.scrollWidth <= node.clientWidth + 1
         })
@@ -110,6 +143,7 @@ async (page) => {
       if (!fits) throw new Error(`Dashboard overflow or blank chart at ${viewport.width}`)
       await page.screenshot({ path: `output/playwright/account-dashboard-${viewport.width}.png`, fullPage: true, animations: 'disabled' })
     }
+    await dashboard.getByRole('button', {name:'运行诊断',exact:true}).click()
     fail = true
     await dashboard.getByRole('button', { name: '刷新账号指标', exact: true }).click()
     await dashboard.getByText('采样失败，当前显示上一次数据', { exact: true }).waitFor()
@@ -130,10 +164,16 @@ async (page) => {
     await loaded('群管乙', 19)
     await choose('工作台总览')
     await page.getByRole('heading', { name: '群管机器人状态', exact: true }).waitFor()
-    await page.getByRole('heading', { name: '验收目标', exact: true }).waitFor()
+    const capacity = page.locator('details.capacity-section')
+    await capacity.locator('summary').getByText('容量验收目标', { exact: true }).waitFor()
+    if (await capacity.getAttribute('open') !== null) throw new Error('Unmeasured capacity targets expanded by default')
+    await capacity.locator('summary').click()
+    await capacity.getByText('生产资源预算', { exact: true }).waitFor()
+    await capacity.locator('summary').click()
     if (await dashboard.count()) throw new Error('Overview still shows account panel')
     await page.getByRole('button', { name: '切换工作台', exact: true }).click()
-    await page.locator('.brand-name').filter({ hasText: '热群机器人' }).waitFor()
+    await page.getByRole('dialog', { name: '选择平台', exact: true }).getByRole('button', { name: '热群机器人', exact: true }).click()
+    await page.locator('.brand-name').filter({hasText:'管理后台'}).waitFor()
     await choose('聊天甲')
     await loaded('聊天甲', 3)
     viewer = true
@@ -142,13 +182,12 @@ async (page) => {
       sessionStorage.setItem(`wsl:account:${owner}:wsl`, '')
     }, realMe.user.id)
     await page.reload()
-    await choose('群管甲')
-    await loaded('群管甲', 7)
-    await dashboard.getByText('仅本租户授权群', { exact: true }).waitFor()
-    if (await dashboard.getByRole('button', { name: /^删除机器人/ }).count() ||
-      await dashboard.getByRole('button', { name: '注册 / 登录', exact: true }).count()) throw new Error('Tenant sees native account controls')
+    await page.locator('.brand-name').filter({hasText:'用户中心'}).waitFor()
+    await page.getByRole('heading', {name:'我的群组',exact:true}).waitFor()
+    if (await dashboard.count() || await page.getByRole('combobox',{name:'机器人面板',exact:true}).count())
+      throw new Error('Tenant sees shared account controls or telemetry')
     if (writes.length) throw new Error('Panel views mutated a connection')
-    return { passed: true, scope: ['account', 'workspace', 'tenant'], lateResponseIgnored: true, staleScopeSafe: true, chartPixelCheck: true, viewports: [320, 390, 647, 1440], writes: 0 }
+    return { passed: true, scope: ['account', 'workspace', 'tenant'], sampleLimit:1000, totalP95:true, collapsedDiagnostics:true, lateResponseIgnored: true, staleScopeSafe: true, chartPixelCheck: true, viewports: [320, 390, 647, 1440], writes: 0 }
   } finally {
     release()
     await page.unroute(pattern, handler)

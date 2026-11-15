@@ -143,3 +143,38 @@ func TestBusinessBoundaries(t *testing.T) {
 		}
 	}
 }
+
+func TestAuthenticatedLargeReadResponseRemainsBounded(t *testing.T) {
+	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encoder.Close()
+	for _, size := range []int{Limit + Limit/2, 3 * Limit, 3*Limit + 1} {
+		plain := bytes.Repeat([]byte("x"), size)
+		frame := encoder.EncodeAll(plain, nil)
+		key, aad := make([]byte, 32), make([]byte, 16)
+		sealed, err := originalSeal(key, make([]byte, 8), frame, aad)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := append([]byte(nil), sealed[len(sealed)-16:]...)
+		body = append(body, make([]byte, 16)...)
+		body = append(body, sealed[:len(sealed)-16]...)
+		if _, err := OpenBusiness(key, aad, body, Limit); err == nil {
+			t.Fatal("ordinary cap admitted a large response")
+		}
+		got, err := OpenBusiness(key, aad, body, 3*Limit)
+		if size <= 3*Limit {
+			if err != nil || !bytes.Equal(got, plain) {
+				t.Fatal("bounded authenticated large response rejected", size, err)
+			}
+		} else if err == nil {
+			t.Fatal("large-read cap admitted a decompression bomb")
+		}
+		body[0] ^= 1
+		if _, err := OpenBusiness(key, aad, body, 3*Limit); err == nil {
+			t.Fatal("large-read cap bypassed authentication")
+		}
+	}
+}

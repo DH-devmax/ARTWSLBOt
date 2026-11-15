@@ -1,203 +1,88 @@
-<!-- 柱状图 -->
 <template>
-  <div ref="chartRef" :style="{ height: props.height }" v-loading="props.loading"> </div>
+  <div ref="chartRef" class="art-chart-surface" :style="{ height }" v-loading="loading" />
 </template>
 
 <script setup lang="ts">
-  import { useChartOps, useChartComponent } from '@/hooks/core/useChart'
-  import { getCssVar } from '@/utils/ui'
-  import { graphic, type EChartsOption } from '@/plugins/echarts'
+  import { computed } from 'vue'
   import type { BarChartProps, BarDataItem } from '@/types/component/chart'
+  import { useChartSurface } from '../useChartSurface'
 
   defineOptions({ name: 'ArtBarChart' })
-
   const props = withDefaults(defineProps<BarChartProps>(), {
-    // 基础配置
-    height: useChartOps().chartHeight,
+    height: '256px',
     loading: false,
     isEmpty: false,
-    colors: () => useChartOps().colors,
+    colors: () => ['#4361ee', '#13a584', '#d39525', '#d95a65'],
     borderRadius: 4,
-
-    // 数据配置
-    data: () => [0, 0, 0, 0, 0, 0, 0],
+    data: () => [],
     xAxisData: () => [],
     barWidth: '40%',
     stack: false,
-
-    // 轴线显示配置
     showAxisLabel: true,
     showAxisLine: true,
     showSplitLine: true,
-
-    // 交互配置
     showTooltip: true,
     showLegend: false,
     legendPosition: 'bottom'
   })
-
-  // 判断是否为多数据
-  const isMultipleData = computed(() => {
-    return (
-      Array.isArray(props.data) &&
-      props.data.length > 0 &&
-      typeof props.data[0] === 'object' &&
-      'name' in props.data[0]
-    )
-  })
-
-  // 获取颜色配置
-  const getColor = (customColor?: string, index?: number) => {
-    if (customColor) return customColor
-
-    if (index !== undefined) {
-      return props.colors![index % props.colors!.length]
-    }
-
-    // 默认渐变色
-    return new graphic.LinearGradient(0, 0, 0, 1, [
-      {
-        offset: 0,
-        color: getCssVar('--el-color-primary-light-4')
+  const series = computed(() =>
+    typeof props.data[0] === 'object'
+      ? (props.data as BarDataItem[])
+      : [{ name: '数量', data: props.data as number[] }]
+  )
+  const chartRef = useChartSurface(
+    () => ({
+      animation: false,
+      color: props.colors,
+      grid: { left: 42, right: 12, top: props.showLegend ? 38 : 16, bottom: 36 },
+      tooltip: props.showTooltip
+        ? { trigger: 'axis', confine: true, renderMode: 'richText' }
+        : undefined,
+      legend: props.showLegend ? { top: 0, type: 'scroll' } : undefined,
+      xAxis: {
+        type: 'category',
+        data: props.xAxisData,
+        axisTick: { show: false },
+        axisLine: { show: props.showAxisLine, lineStyle: { color: '#d8dce5' } },
+        axisLabel: { show: props.showAxisLabel, color: '#687084', fontSize: 11, hideOverlap: true }
       },
-      {
-        offset: 1,
-        color: getCssVar('--el-color-primary')
-      }
-    ])
-  }
-
-  // 创建渐变色
-  const createGradientColor = (color: string) => {
-    return new graphic.LinearGradient(0, 0, 0, 1, [
-      {
-        offset: 0,
-        color: color
+      yAxis: {
+        type: 'value',
+        minInterval: 1,
+        axisLabel: { show: props.showAxisLabel, color: '#687084' },
+        axisLine: { show: false },
+        splitLine: { show: props.showSplitLine, lineStyle: { color: '#edf0f4', type: 'dashed' } }
       },
-      {
-        offset: 1,
-        color: color
-      }
-    ])
-  }
-
-  // 获取基础样式配置
-  const getBaseItemStyle = (
-    color: string | InstanceType<typeof graphic.LinearGradient> | undefined
-  ) => ({
-    borderRadius: props.borderRadius,
-    color: typeof color === 'string' ? createGradientColor(color) : color
-  })
-
-  // 创建系列配置
-  const createSeriesItem = (config: {
-    name?: string
-    data: number[]
-    color?: string | InstanceType<typeof graphic.LinearGradient>
-    barWidth?: string | number
-    stack?: string
-  }) => {
-    const animationConfig = getAnimationConfig()
-
-    return {
-      name: config.name,
-      data: config.data,
-      type: 'bar' as const,
-      stack: config.stack,
-      itemStyle: getBaseItemStyle(config.color),
-      barWidth: config.barWidth || props.barWidth,
-      ...animationConfig
-    }
-  }
-
-  // 使用新的图表组件抽象
-  const {
-    chartRef,
-    getAxisLineStyle,
-    getAxisLabelStyle,
-    getAxisTickStyle,
-    getSplitLineStyle,
-    getAnimationConfig,
-    getTooltipStyle,
-    getLegendStyle,
-    getGridWithLegend
-  } = useChartComponent({
-    props,
-    checkEmpty: () => {
-      // 检查单数据情况
-      if (Array.isArray(props.data) && typeof props.data[0] === 'number') {
-        const singleData = props.data as number[]
-        return !singleData.length || singleData.every((val) => val === 0)
-      }
-
-      // 检查多数据情况
-      if (Array.isArray(props.data) && typeof props.data[0] === 'object') {
-        const multiData = props.data as BarDataItem[]
-        return (
-          !multiData.length ||
-          multiData.every((item) => !item.data?.length || item.data.every((val) => val === 0))
-        )
-      }
-
-      return true
-    },
-    watchSources: [() => props.data, () => props.xAxisData, () => props.colors],
-    generateOptions: (): EChartsOption => {
-      const options: EChartsOption = {
-        grid: getGridWithLegend(props.showLegend && isMultipleData.value, props.legendPosition, {
-          top: 15,
-          right: 0,
-          left: 0
-        }),
-        tooltip: props.showTooltip ? getTooltipStyle() : undefined,
-        xAxis: {
-          type: 'category',
-          data: props.xAxisData,
-          axisTick: getAxisTickStyle(),
-          axisLine: getAxisLineStyle(props.showAxisLine),
-          axisLabel: getAxisLabelStyle(props.showAxisLabel)
-        },
-        yAxis: {
-          type: 'value',
-          axisLabel: getAxisLabelStyle(props.showAxisLabel),
-          axisLine: getAxisLineStyle(props.showAxisLine),
-          splitLine: getSplitLineStyle(props.showSplitLine)
-        }
-      }
-
-      // 添加图例配置
-      if (props.showLegend && isMultipleData.value) {
-        options.legend = getLegendStyle(props.legendPosition)
-      }
-
-      // 生成系列数据
-      if (isMultipleData.value) {
-        const multiData = props.data as BarDataItem[]
-        options.series = multiData.map((item, index) => {
-          const computedColor = getColor(props.colors[index], index)
-
-          return createSeriesItem({
+      series: props.isEmpty
+        ? []
+        : series.value.map((item, index) => ({
             name: item.name,
+            type: 'bar',
             data: item.data,
-            color: computedColor,
-            barWidth: item.barWidth,
-            stack: props.stack ? item.stack || 'total' : undefined
-          })
-        })
-      } else {
-        // 单数据情况
-        const singleData = props.data as number[]
-        const computedColor = getColor()
-
-        options.series = [
-          createSeriesItem({
-            data: singleData,
-            color: computedColor
-          })
-        ]
-      }
-
-      return options
-    }
-  })
+            barWidth: item.barWidth || props.barWidth,
+            barMaxWidth: 32,
+            stack: props.stack ? item.stack || 'total' : undefined,
+            itemStyle: {
+              color: props.colors[index % props.colors.length],
+              borderRadius: Array.isArray(props.borderRadius)
+                ? props.borderRadius
+                : [props.borderRadius, props.borderRadius, 0, 0]
+            }
+          }))
+    }),
+    [
+      () => props.data,
+      () => props.xAxisData,
+      () => props.colors,
+      () => props.isEmpty,
+      () => props.showLegend
+    ]
+  )
 </script>
+
+<style scoped>
+  .art-chart-surface {
+    width: 100%;
+    min-width: 0;
+  }
+</style>

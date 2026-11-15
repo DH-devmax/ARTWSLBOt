@@ -31,9 +31,20 @@ type Deployment struct {
 	AppKey          string            `json:"app_key"`
 	DeviceID        string            `json:"device_id"`
 	ProtocolVersion string            `json:"protocol_version"`
+	DesktopPlatform string            `json:"desktop_platform,omitempty"`
+	AppVersion      int               `json:"app_version,omitempty"`
+	AppHash         string            `json:"app_hash,omitempty"`
 }
 
 func ParseDeployment(data []byte) (Deployment, error) {
+	return parseDeployment(data, false)
+}
+
+func ParseMobileDeployment(data []byte) (Deployment, error) {
+	return parseDeployment(data, true)
+}
+
+func parseDeployment(data []byte, mobile bool) (Deployment, error) {
 	var d Deployment
 	if len(data) == 0 || len(data) > 60000 {
 		return d, errors.New("native_deployment_invalid")
@@ -45,8 +56,42 @@ func ParseDeployment(data []byte) (Deployment, error) {
 	if err != nil || decoder.Decode(&extra) != io.EOF {
 		return Deployment{}, errors.New("native_deployment_invalid")
 	}
-	if d.ProtocolVersion == "" {
-		d.ProtocolVersion = "3.7.1"
+	if !mobile {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(data, &fields) != nil {
+			return Deployment{}, errors.New("native_deployment_invalid")
+		}
+		for name := range fields {
+			if strings.EqualFold(name, "app_version") || strings.EqualFold(name, "app_hash") {
+				return Deployment{}, errors.New("native_desktop_required")
+			}
+		}
+	}
+	return validateDeployment(d, mobile)
+}
+
+func validateDeploymentMode(d Deployment, mobile bool) error {
+	if mobile {
+		if d.ProtocolVersion != MobileProtocolVersion {
+			return rejection("native_mobile_required")
+		}
+		if d.DesktopPlatform != "" || d.AppVersion != 337 || d.AppHash != android374AppHash {
+			return rejection("native_deployment_invalid")
+		}
+		return nil
+	}
+	if !supportedProtocol(d.ProtocolVersion) || d.AppVersion != 0 || d.AppHash != "" {
+		return rejection("native_desktop_required")
+	}
+	if !supportedDesktop(d.DesktopPlatform) {
+		return rejection("native_deployment_invalid")
+	}
+	return nil
+}
+
+func validateDeployment(d Deployment, mobile bool) (Deployment, error) {
+	if err := validateDeploymentMode(d, mobile); err != nil {
+		return Deployment{}, err
 	}
 	u, err := url.Parse(d.Origin)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil ||
@@ -55,9 +100,6 @@ func ParseDeployment(data []byte) (Deployment, error) {
 		return Deployment{}, errors.New("native_deployment_invalid")
 	}
 	d.Origin = strings.TrimRight(d.Origin, "/")
-	if !supportedProtocol(d.ProtocolVersion) {
-		return Deployment{}, errors.New("native_protocol_unsupported")
-	}
 	for _, key := range []string{d.SigningSeed, d.BodyKey, d.ServerKey} {
 		if _, err := decodeKey(key); err != nil {
 			return Deployment{}, errors.New("native_deployment_invalid")
@@ -78,6 +120,12 @@ func ParseDeployment(data []byte) (Deployment, error) {
 			return Deployment{}, errors.New("native_deployment_invalid")
 		}
 	}
+	d.Metadata = append([]uint64(nil), d.Metadata...)
+	headers := make(map[string]string, len(d.Headers))
+	for name, value := range d.Headers {
+		headers[name] = value
+	}
+	d.Headers = headers
 	return d, nil
 }
 

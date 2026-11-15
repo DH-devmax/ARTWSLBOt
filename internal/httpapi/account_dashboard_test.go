@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +46,11 @@ func TestDashboardHealth(t *testing.T) {
 	out.Receiver = &receiverView{Enabled: true, Observed: true, Snapshot: &gateway.ReceiverSnapshot{State: "connected", HeartbeatAt: &now}}
 	out.RuntimeObserved = true
 	health, _ = classifyAccountDashboard(out)
+	if health.Status != "unobserved" {
+		t.Fatal("heartbeat without durable initial sync claimed healthy")
+	}
+	out.Receiver.Snapshot.SyncedAt = &now
+	health, _ = classifyAccountDashboard(out)
 	if health.Status != "healthy" {
 		t.Fatal("fresh connected receiver was not observed")
 	}
@@ -65,7 +72,7 @@ func TestPostgresAccountDashboard(t *testing.T) {
 		t.Fatal(err)
 	}
 	vault, _ := security.NewVault(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{23}, 32)))
-	s := New(db, vault, "http://127.0.0.1:5173", false)
+	s := newCaptchaTestServer(db, vault, "http://127.0.0.1:5173", false)
 	t.Cleanup(s.Native.Close)
 	server := httptest.NewServer(s.Handler())
 	t.Cleanup(server.Close)
@@ -82,6 +89,7 @@ func TestPostgresAccountDashboard(t *testing.T) {
 		body := expect(t, admin, "POST", "/users", map[string]string{
 			"username": name, "password": password, "tenant_name": name,
 		}, 201)
+		explicitTestCeiling(t, admin, field(t, body, "tenant_id"))
 		return login(name), field(t, body, "tenant_id"), field(t, body, "id")
 	}
 	alice, tenantA, aliceID := tenant("dashboard-alice")
@@ -161,6 +169,100 @@ func TestPostgresAccountDashboard(t *testing.T) {
 		math.Abs(*a.Performance.P95-20) > 0.01 || math.Abs(a.Performance.PerSecond-251.0/60) > 0.001 {
 		t.Fatalf("wrong measured latency/rate: %+v", a.Performance)
 	}
+	// More than 1000 persisted observations; retained replay and a different
+	// workspace must not inflate the latest account/workspace sample population.
+	exec(`WITH events AS (
+        INSERT INTO native_received_events(account_id,event_key,kind,received_at,payload_sealed)
+        SELECT $1,'performance-'||n,'group',now()-interval '1 minute','\x01'
+        FROM generate_series(1,1500) n RETURNING id,event_key
+    ) INSERT INTO native_decoded_events(event_id,account_id,state,deployment_version,received_at,decoded_at,decode_ms)
+        SELECT id,$1,'decoded',1,now()-interval '1 minute',
+            now()-((1501-split_part(event_key,'-',2)::int)*interval '1 millisecond'),
+            CASE WHEN split_part(event_key,'-',2)::int>500 THEN 2 ELSE 999 END FROM events`, shared)
+	exec(`WITH event AS (
+        INSERT INTO native_received_events(account_id,event_key,kind,received_at,payload_sealed)
+        VALUES($1,'performance-chat','group',now(),'\x01') RETURNING id
+    ) INSERT INTO native_decoded_events(event_id,account_id,state,deployment_version,received_at,decoded_at,decode_ms)
+        SELECT id,$1,'decoded',1,now(),now(),9999 FROM event`, ai)
+	accounts, sampleErr := s.sampleMonitorAccounts(ctx, db.Platform)
+	if sampleErr != nil {
+		t.Fatal(sampleErr)
+	}
+	s.monitoring.last = systemMonitor{DatabaseAvailable: true, DatabaseSampledAt: time.Now().UTC(), Accounts: accounts}
+	measured := fetch(admin, shared)
+	if measured.Decode == nil || measured.Decode.Samples != 1000 || measured.Decode.P95 == nil ||
+		*measured.Decode.P95 != 2 || measured.NativePerformance == nil || measured.Decode.Latency.From == nil {
+		t.Fatalf("latest 1000 measurements unavailable: %+v", measured.Decode)
+	}
+	var overview map[string]json.RawMessage
+	if err := json.Unmarshal(expect(t, admin, "GET", "/overview", nil, 200), &overview); err != nil {
+		t.Fatal(err)
+	}
+	var latency latencyDistribution
+	if err := json.Unmarshal(overview["decode_latency"], &latency); err != nil ||
+		latency.Samples != 1000 || latency.P95 == nil || *latency.P95 != 2 {
+		t.Fatal("overview latency crossed workspace or lost sample limit", err)
+	}
+	tenantMetrics := fetch(alice, shared)
+	if tenantMetrics.Decode != nil || tenantMetrics.NativePerformance != nil {
+		t.Fatal("tenant received raw shared-account performance")
+	}
+	if strings.Contains(string(expect(t, alice, "GET", "/overview", nil, 200)), `"decode_latency"`) {
+		t.Fatal("tenant overview leaked shared-account samples")
+	}
+	var plan string
+	if err := db.Platform.QueryRow(ctx, `INSERT INTO plans(name,group_limit,ai_group_limit)
+        VALUES('live-dashboard-plan',10,0) RETURNING id::text`).Scan(&plan); err != nil {
+		t.Fatal(err)
+	}
+	exec(`INSERT INTO subscriptions(tenant_id,plan_id,expires_at) VALUES($1,$2,now()+interval '1 day')`, tenantA, plan)
+	livePath := "/accounts/" + shared + "/events?view=dashboard"
+	expect(t, alice, "GET", "/accounts/"+shared+"/events?view=messages", nil, 403)
+	expect(t, bob, "GET", livePath, nil, 404)
+	expect(t, alice, "GET", "/accounts/"+separate+"/events?view=dashboard", nil, 404)
+	response, err := alice.client.Get(server.URL + "/api/v1" + livePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != 200 {
+		response.Body.Close()
+		t.Fatal("tenant dashboard stream denied", response.StatusCode)
+	}
+	scanner := bufio.NewScanner(response.Body)
+	var live map[string]json.RawMessage
+	for scanner.Scan() {
+		if strings.HasPrefix(scanner.Text(), "data: ") {
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(scanner.Text(), "data: ")), &live); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+	response.Body.Close()
+	var tenantSnapshot accountDashboard
+	if err := json.Unmarshal(live["dashboard"], &tenantSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if tenantSnapshot.Groups.Authorized != 1 || tenantSnapshot.Inbox.Quarantined != 0 ||
+		tenantSnapshot.Operations.Unknown != 0 || tenantSnapshot.Receiver != nil ||
+		live["receiver"] != nil || live["decoded_ids"] != nil {
+		t.Fatal("tenant stream exposed shared-account activity")
+	}
+	accessRequest := httptest.NewRequest("GET", "/api/v1"+livePath, nil)
+	accessRequest.SetPathValue("id", shared)
+	base, _ := url.Parse(server.URL)
+	for _, cookie := range alice.client.Jar.Cookies(base) {
+		accessRequest.AddCookie(cookie)
+	}
+	principal := Principal{ID: aliceID, TenantID: tenantA, Role: "user"}
+	if err := s.accountEventAccess(accessRequest, principal, "dashboard"); err != nil {
+		t.Fatal("active tenant stream lost access", err)
+	}
+	exec(`UPDATE subscriptions SET expires_at=now()-interval '1 second' WHERE tenant_id=$1`, tenantA)
+	if err := s.accountEventAccess(accessRequest, principal, "dashboard"); err == nil {
+		t.Fatal("expired package retained stream access")
+	}
+	exec(`UPDATE subscriptions SET expires_at=now()+interval '1 day' WHERE tenant_id=$1`, tenantA)
 	total := 0
 	for i, bucket := range a.Performance.Series {
 		total += bucket.Count
@@ -188,12 +290,18 @@ func TestPostgresAccountDashboard(t *testing.T) {
 	expect(t, tenantChat, "GET", "/accounts/"+ai+"/dashboard", nil, 403)
 	exec(`INSERT INTO user_access(user_id,role_code,permissions) VALUES($1,'custom',ARRAY['overview:read'])`, aliceID)
 	expect(t, alice, "GET", "/accounts/"+shared+"/dashboard", nil, 403)
+	if err := s.accountEventAccess(accessRequest, principal, "dashboard"); err == nil {
+		t.Fatal("revoked account permission retained stream access")
+	}
 	exec(`UPDATE user_access SET permissions=ARRAY['accounts:read'] WHERE user_id=$1`, aliceID)
 	expect(t, alice, "GET", "/accounts/"+shared+"/dashboard", nil, 403)
 	exec(`UPDATE user_access SET permissions=ARRAY['overview:read','accounts:read'] WHERE user_id=$1`, aliceID)
 	// Losing active group authority removes ingress metrics, even if the retained
 	// ownership still permits reading the robot's safe connection record.
 	exec(`UPDATE group_bindings SET active=false WHERE group_id=$1`, groupA)
+	if err := s.accountEventAccess(accessRequest, principal, "dashboard"); err == nil {
+		t.Fatal("inactive group retained stream access")
+	}
 	revoked := fetch(alice, shared)
 	if revoked.Performance.Inserted != 0 || revoked.Inbox.Pending != 0 || revoked.Groups.Authorized != 0 {
 		t.Fatal("inactive binding still granted shared ingress metrics")

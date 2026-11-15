@@ -1,0 +1,28 @@
+/*
+ * Adapted tokens from Voltline Analytics, Copyright 2026 Uiverse Design.
+ * See LICENSE.md and DESIGN.md in this directory for the original attribution.
+ * Local system fonts replace remote Google Fonts for offline operation.
+ */
+:root {
+  --vl-canvas: #f2f4f3;
+  --vl-paper: #fff;
+  --vl-mist: #f7f8f8;
+  --vl-mist-deep: #eef1ef;
+  --vl-ink: #202824;
+  --vl-ink-soft: #35433c;
+  --vl-slate: #7a827d;
+  --vl-hairline: #dfe5e1;
+  --vl-hairline-soft: #edf0ee;
+  --vl-lime: #d6ff3d;
+  --vl-lime-deep: #a8cc22;
+  --vl-lime-soft: #eaffa8;
+  --vl-positive: #2bb673;
+  --vl-negative: #e25555;
+  --vl-font-body:
+    Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', system-ui,
+    sans-serif;
+  --vl-font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  --vl-focus-ring: 0 0 0 3px rgb(168 204 34 / 24%);
+  --vl-shadow-sm: 0 1px 2px rgb(11 16 21 / 4%);
+  --vl-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}

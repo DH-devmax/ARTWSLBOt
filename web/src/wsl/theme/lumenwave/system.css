@@ -1,0 +1,50 @@
+/*
+ * Lumenwave Finance adaptation, Copyright 2026 Uiverse.
+ * Original guidance and attribution: DESIGN.md; license: LICENSE.md.
+ * Local fonts and product tokens only; no remote imports or template reset.
+ */
+:root {
+  --ui-canvas: #eeeff1;
+  --ui-paper: #fff;
+  --ui-soft: #f5f6f7;
+  --ui-soft-deep: #ebecef;
+  --ui-ink: #0b0b0e;
+  --ui-text: #3e4148;
+  --ui-muted: #5c5f66;
+  --ui-line: #e3e5e9;
+  --ui-line-soft: #eceef1;
+  --ui-lime: #d8ff36;
+  --ui-action: #17171b;
+  --ui-action-hover: #303036;
+  --ui-accent: #3b4810;
+  --ui-accent-soft: #f1f4e8;
+  --ui-chart: #7a5bff;
+  --ui-font:
+    -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --ui-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  --ui-focus: 0 0 0 3px rgb(216 255 54 / 45%);
+  --ui-shadow: 0 1px 2px rgb(11 11 14 / 4%), 0 12px 28px -20px rgb(11 11 14 / 14%);
+  --ui-sidebar-width: 224px;
+  --ui-header-height: 56px;
+
+  /* Compatibility names for existing business components; one active palette. */
+  --fw-canvas: var(--ui-canvas);
+  --fw-paper: var(--ui-paper);
+  --fw-mist: var(--ui-soft);
+  --fw-mist-deep: var(--ui-soft-deep);
+  --fw-ink: var(--ui-ink);
+  --fw-ink-soft: var(--ui-text);
+  --fw-slate: var(--ui-muted);
+  --fw-hairline: var(--ui-line);
+  --fw-hairline-soft: var(--ui-line-soft);
+  --fw-blue: var(--ui-action);
+  --fw-blue-deep: var(--ui-accent);
+  --fw-blue-soft: var(--ui-accent-soft);
+  --fw-positive: #16834b;
+  --fw-negative: #c34442;
+  --fw-font-body: var(--ui-font);
+  --fw-font-mono: var(--ui-mono);
+  --fw-focus-ring: var(--ui-focus);
+  --fw-shadow-sm: var(--ui-shadow);
+  --fw-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}

@@ -86,3 +86,30 @@ func TestTransportAndSessionGuards(t *testing.T) {
 		t.Fatal("world-readable session accepted")
 	}
 }
+
+func TestToolCallUsesFixedEndpointStableKeyAndCSRF(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path == "/api/v1/auth/login" {
+			http.SetCookie(w, &http.Cookie{Name: "wsl_session", Value: strings.Repeat("a", 43), Path: "/"})
+			http.SetCookie(w, &http.Cookie{Name: "wsl_csrf", Value: strings.Repeat("b", 43), Path: "/"})
+		} else if r.URL.Path != "/api/v1/test-tools/call" || r.Method != "POST" ||
+			r.Header.Get("Idempotency-Key") != "stable-tool-key" || r.Header.Get("X-CSRF-Token") != strings.Repeat("b", 43) {
+			t.Error("tool transport widened endpoint or lost identity/key")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"code":0,"data":{}}`))
+	}))
+	defer server.Close()
+	c, _ := New(server.URL)
+	if err := c.Login("synthetic", "synthetic-password"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.DoTool(json.RawMessage(`{"name":"inspect_operation","arguments":{}}`), "stable-tool-key"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.DoTool(json.RawMessage(`{}`), "short"); err == nil || calls != 2 {
+		t.Fatal("invalid key reached tool endpoint", calls, err)
+	}
+}

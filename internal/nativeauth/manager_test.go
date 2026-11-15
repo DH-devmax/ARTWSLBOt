@@ -42,7 +42,7 @@ func TestSharedRequestIDsAreUniqueAndDoNotWrap(t *testing.T) {
 func syntheticDeployment() Deployment {
 	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
 	return Deployment{Origin: "https://example.invalid", Headers: map[string]string{}, Metadata: make([]uint64, 14),
-		SigningSeed: key, BodyKey: key, ServerKey: key, CaptchaID: "synthetic-site", DeviceID: "synthetic-device", ProtocolVersion: "3.7.3"}
+		SigningSeed: key, BodyKey: key, ServerKey: key, CaptchaID: "synthetic-site", DeviceID: "synthetic-device", ProtocolVersion: DesktopProtocolVersion}
 }
 
 func TestDeploymentAndPublicNetwork(t *testing.T) {
@@ -69,18 +69,24 @@ func TestDeploymentAndPublicNetwork(t *testing.T) {
 }
 
 type fakeClient struct {
-	safe     atomic.Bool
-	block    bool
-	unknown  bool
-	loginErr error
-	device   bool
-	params   map[string]any
-	calls    atomic.Int32
+	safe        atomic.Bool
+	block       bool
+	unknown     bool
+	loginErr    error
+	requestErr  error
+	finishErr   error
+	securityErr error
+	device      bool
+	params      map[string]any
+	calls       atomic.Int32
 }
 
 func (f *fakeClient) Request(_ context.Context, route string, params map[string]any) (map[string]json.RawMessage, error) {
 	f.calls.Add(1)
 	f.params = params
+	if f.requestErr != nil {
+		return nil, f.requestErr
+	}
 	if route == "/v1/user/get-change-device-verify" {
 		return map[string]json.RawMessage{
 			"phone": json.RawMessage(`{"countryCode":86,"nationalNumber":13800000000}`),
@@ -127,11 +133,12 @@ func TestNetworkErrorsReachViewWithoutTreatingPreconnectAsUnknown(t *testing.T) 
 		}
 		f.loginErr = &Error{Code: "native_transport_unknown", Submitted: true, Diagnostic: "connection_closed"}
 		view, err = m.Action("owner", "account", view.ID, input)
-		if err != nil || view.Error != "" || view.Diagnostic != "" || view.ProviderCode != 0 {
+		if err != nil || view.Error != "" || view.Diagnostic != "" || view.ProviderCode != 0 || view.FailureStage != "" {
 			t.Fatal("old error survived explicit resubmission", err)
 		}
 		view = waitState(t, m, view.ID, "unknown")
-		if view.Diagnostic != "connection_closed" || view.Error != "native_transport_unknown" {
+		if view.Diagnostic != "connection_closed" || view.Error != "native_transport_unknown" ||
+			view.FailureStage != "password_login" {
 			t.Fatal("safe transport diagnostic not propagated")
 		}
 		if _, err = m.Action("owner", "account", view.ID, input); err == nil || f.calls.Load() != 2 {
@@ -202,8 +209,17 @@ func TestExpiryAndStartBudget(t *testing.T) {
 		t.Fatal("start budget bypassed")
 	}
 }
-func (f *fakeClient) VerifySecurity(context.Context, string) error { f.safe.Store(false); return nil }
+func (f *fakeClient) VerifySecurity(context.Context, string) error {
+	if f.securityErr != nil {
+		return f.securityErr
+	}
+	f.safe.Store(false)
+	return nil
+}
 func (f *fakeClient) Finish(context.Context) (Session, string, error) {
+	if f.finishErr != nil {
+		return Session{}, "", f.finishErr
+	}
 	return Session{UID: 123, JWT: "synthetic-jwt", NIMID: "synthetic-peer", NIMToken: "synthetic-im"}, "synthetic", nil
 }
 func (f *fakeClient) SecurityRequired() bool { return f.safe.Load() }

@@ -1,10 +1,6 @@
-.git
 .env
 .env.*
-web/node_modules
-web/dist
-web/.git
-var
+.git
+node_modules
 output
-.venv
-**/__pycache__
+var

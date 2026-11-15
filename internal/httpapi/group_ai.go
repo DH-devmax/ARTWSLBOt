@@ -29,15 +29,17 @@ func (s *Server) requestGroupAI(w http.ResponseWriter, r *http.Request, p Princi
 	if _, err = tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(798423)`); err != nil {
 		return err
 	}
-	tenant, err := authorizeBusiness(r, tx, p, r.PathValue("id"), "ai")
+	service, err := control.HeatToggleEntitlement(r.Context(), tx, principalActor(p), tenantPermissions,
+		requestWorkspace(r), r.PathValue("id"))
 	if err != nil {
 		return err
 	}
+	tenant := service.TenantID
 	var currentVersion int64
-	var currentWorkspace string
-	if err = tx.QueryRow(r.Context(), `SELECT b.version,coalesce(a.workspace,'') FROM group_bindings b
+	var currentWorkspace, currentAccount string
+	if err = tx.QueryRow(r.Context(), `SELECT b.version,coalesce(a.workspace,''),coalesce(b.ai_account_id::text,'') FROM group_bindings b
         LEFT JOIN accounts a ON a.id=b.ai_account_id WHERE b.group_id=$1`,
-		r.PathValue("id")).Scan(&currentVersion, &currentWorkspace); err != nil {
+		r.PathValue("id")).Scan(&currentVersion, &currentWorkspace, &currentAccount); err != nil {
 		return err
 	}
 	if currentVersion != in.Version {
@@ -46,35 +48,26 @@ func (s *Server) requestGroupAI(w http.ResponseWriter, r *http.Request, p Princi
 	if in.Enabled && currentWorkspace != "" && currentWorkspace != "maibot" {
 		return fail(409, "ai_binding_requires_review")
 	}
-	var limit int
-	if err = tx.QueryRow(r.Context(), `SELECT p.ai_group_limit FROM subscriptions sub JOIN plans p ON p.id=sub.plan_id
-        WHERE sub.tenant_id=$1 AND sub.enabled AND sub.expires_at>now()`, tenant).Scan(&limit); err != nil {
-		return err
-	}
 	if in.Enabled {
-		var used, total int
-		if err = tx.QueryRow(r.Context(), `SELECT count(*) FILTER(WHERE tenant_id=$1),count(*) FROM group_bindings
-            WHERE active AND (ai_requested OR ai_enabled) AND group_id<>$2`, tenant, r.PathValue("id")).Scan(&used, &total); err != nil {
+		if err = control.CheckAssignmentEntitlement(r.Context(), tx, tenant, r.PathValue("id"), "maibot"); err != nil {
+			if denied, ok := err.(*control.Failure); ok && denied.Code == "group_quota_exceeded" {
+				return fail(409, "ai_group_quota_exceeded")
+			}
 			return err
 		}
-		if used >= limit || total >= control.MaxAuthorizedGroups {
-			return fail(409, "ai_group_quota_exceeded")
-		}
 	}
-	var account string
-	err = tx.QueryRow(r.Context(), `SELECT a.id::text FROM accounts a LEFT JOIN account_groups ag
-        ON ag.account_id=a.id AND ag.group_id=$1 WHERE a.workspace='maibot' AND a.auth_state='authenticated'
-        AND ($2 OR a.id=(SELECT ai_account_id FROM group_bindings WHERE group_id=$1) OR (
-          ag.role IN('member','admin','owner') AND ag.observation_source='native'
-          AND ag.observed_at>now()-interval '60 seconds'))
-        ORDER BY
-          CASE WHEN a.id=(SELECT ai_account_id FROM group_bindings WHERE group_id=$1) THEN 0 ELSE 1 END,
-          CASE WHEN ag.role IN('member','admin','owner') AND ag.observation_source='native'
-            AND ag.observed_at>now()-interval '60 seconds' THEN 0 ELSE 1 END,
-          (SELECT count(*) FROM group_bindings b WHERE b.ai_account_id=a.id AND b.active AND (b.ai_requested OR b.ai_enabled)),
-          a.created_at,a.id LIMIT 1`, r.PathValue("id"), in.Invite).Scan(&account)
-	if err != nil && err != pgx.ErrNoRows {
-		return err
+	account := currentAccount
+	if in.Enabled && account == "" {
+		options, optionErr := control.AssignmentOptions(r.Context(), tx, r.PathValue("id"), "maibot")
+		if optionErr != nil {
+			return optionErr
+		}
+		account = options.Recommended
+	}
+	if in.Enabled && account != "" {
+		if err = control.CheckAccountCapacity(r.Context(), tx, account, r.PathValue("id")); err != nil {
+			return err
+		}
 	}
 	state := "disabled"
 	if in.Enabled {
@@ -94,14 +87,24 @@ func (s *Server) requestGroupAI(w http.ResponseWriter, r *http.Request, p Princi
 	if err != nil {
 		return err
 	}
+	running, reason := false, "heat_chat_group_not_enabled"
+	if in.Enabled && !in.Invite && s.HeatChat != nil {
+		running, reason, err = s.HeatChat.ActivateRequested(r.Context(), tx, r.PathValue("id"))
+		if err != nil {
+			return err
+		}
+		if running {
+			state = "ready"
+		}
+	}
 	if err = auditTx(r.Context(), tx, p, tenant, "group_ai_requested", r.PathValue("id"),
-		map[string]any{"enabled": in.Enabled, "invite": in.Invite, "state": state, "executed": false}); err != nil {
+		map[string]any{"requested": in.Enabled, "enabled": running, "invite": in.Invite, "state": state, "executed": false}); err != nil {
 		return err
 	}
 	if err = tx.Commit(r.Context()); err != nil {
 		return err
 	}
-	send(w, 200, map[string]any{"version": version, "state": state, "enabled": false, "requested": in.Enabled,
-		"executed": false, "reason": "ai_isolation_not_verified"})
+	send(w, 200, map[string]any{"version": version, "state": state, "enabled": running, "requested": in.Enabled,
+		"executed": false, "reason": reason})
 	return nil
 }

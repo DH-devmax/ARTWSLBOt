@@ -23,7 +23,7 @@ func TestPostgresReceiverControl(t *testing.T) {
 		t.Fatal(err)
 	}
 	vault, _ := security.NewVault(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{19}, 32)))
-	s := New(db, vault, "http://127.0.0.1:5173", false)
+	s := newCaptchaTestServer(db, vault, "http://127.0.0.1:5173", false)
 	defer s.Native.Close()
 	// The manager is not Run: tests must never contact real native services.
 	s.Receiver = gateway.NewReceiverManager(db.Platform, vault, s.nativeRequestIDs)
@@ -49,6 +49,21 @@ func TestPostgresReceiverControl(t *testing.T) {
 	if err = db.Platform.QueryRow(ctx, `SELECT credential_sealed IS NOT NULL AND NOT connection_enabled AND epoch=1
         FROM accounts WHERE id=$1`, id).Scan(&preserved); err != nil || !preserved {
 		t.Fatal("receive toggle changed session or enabled native actions")
+	}
+	expect(t, admin, "PUT", path, map[string]any{"enabled": true, "revision": 2}, 200)
+	if _, err = db.Platform.Exec(ctx, `UPDATE account_receivers
+        SET snapshot='{"state":"blocked","error":"im_auth_rejected","error_stage":"im_login","upstream_code":302}',
+            observed_at=now() WHERE account_id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	// A deliberate reconnect rearms only reception, using the saved session.
+	expect(t, admin, "PUT", path, map[string]any{"enabled": true, "revision": 2}, 409)
+	expect(t, admin, "PUT", path, map[string]any{"enabled": true, "revision": 3}, 200)
+	if err = db.Platform.QueryRow(ctx, `SELECT r.enabled AND r.revision=4 AND r.snapshot='{}'::jsonb
+        AND r.observed_at IS NULL AND a.credential_sealed='\x0102' AND NOT a.connection_enabled AND a.epoch=1
+        FROM account_receivers r JOIN accounts a ON a.id=r.account_id
+        WHERE a.id=$1`, id).Scan(&preserved); err != nil || !preserved {
+		t.Fatal("explicit reconnect retained a terminal block or changed session/action state")
 	}
 	expect(t, admin, "POST", "/users", map[string]string{"username": "receiver-tenant", "password": password, "tenant_name": "receiver-tenant"}, 201)
 	jar, _ = cookiejar.New(nil)

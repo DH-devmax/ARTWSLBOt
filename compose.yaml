@@ -69,10 +69,9 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       NATIVE_DNS_OVER_HTTPS: ${NATIVE_DNS_OVER_HTTPS:-false}
       ENABLE_NATIVE: "false"
-      SIMON_URL: http://simon:30000
+      AI_BRIDGE_TOKEN: ${AI_BRIDGE_TOKEN:?Initialize bridge token}
     depends_on:
       migrate: { condition: service_completed_successfully }
-    networks: [default, monitoring]
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
       interval: 5s
@@ -87,7 +86,6 @@ services:
     entrypoint: ["heatbot"]
     environment:
       AI_BRIDGE_TOKEN: ${AI_BRIDGE_TOKEN:?Initialize bridge token}
-      AI_PROVIDER_ORIGINS: ${AI_PROVIDER_ORIGINS:-}
       AI_ALLOW_TEST_GENERATION: "false"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8090/healthz"]
@@ -97,19 +95,6 @@ services:
     cpus: 3
     mem_limit: 12g
     stop_grace_period: 10s
-  simon:
-    <<: *runtime
-    image: alibahmanyar/simon:0.3.7@sha256:f227b10dd5ec15d00167a1ad931b4c17fd2478ae9e521e61dac5f7b7ad59801a
-    user: "65534:65534"
-    environment:
-      SIMON_ADDRESS: 0.0.0.0
-      SIMON_DB_PATH: /tmp/simon/simon.db
-      SIMON_UPDATE_INTERVAL: "5"
-    networks: [monitoring]
-    tmpfs: ["/tmp:rw,size=32m,noexec,nosuid,uid=65534,gid=65534"]
-    cpus: 0.2
-    mem_limit: 128m
-    # Only API shares this network. No host filesystem, PID or Docker socket.
   web:
     <<: *runtime
     image: ${WSL_WEB_IMAGE:-wsl-web:local}
@@ -127,6 +112,3 @@ services:
     mem_limit: 512m
 volumes:
   postgres-data:
-networks:
-  monitoring:
-    internal: true

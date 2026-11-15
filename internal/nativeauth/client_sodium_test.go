@@ -7,17 +7,14 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
-	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"sync"
+	"strconv"
 	"sync/atomic"
 	"testing"
 
-	"github.com/spaolacci/murmur3"
 	"github.com/zeebo/xxh3"
 	"golang.org/x/crypto/curve25519"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -49,215 +46,169 @@ func decodeProto(t *testing.T, b []byte) (map[int]uint64, map[int][]byte) {
 	return scalars, blobs
 }
 
-func TestSignedNativeLoginProtocols(t *testing.T) {
-	for _, protocol := range []string{"3.7.4", "3.7.3", "3.7.1", "2.8.3"} {
-		modern := protocol == "3.7.3" || protocol == "3.7.4"
-		for _, wrongBinding := range []bool{false, true} {
-			if modern && wrongBinding {
-				continue
-			}
-			t.Run(protocol+map[bool]string{false: "/valid", true: "/wrong-correlation"}[wrongBinding], func(t *testing.T) {
-				d := syntheticDeployment()
-				d.ProtocolVersion = protocol
-				serverPrivate := make([]byte, 32)
-				serverPrivate[0] = 17
-				serverPublic, _ := curve25519.X25519(serverPrivate, curve25519.Basepoint)
-				d.ServerKey = base64.StdEncoding.EncodeToString(serverPublic)
-				d.Headers = map[string]string{"content-type": "application/octet-stream", "x-version": "legacy"}
-				key, _ := decodeKey(d.BodyKey)
-				var mu sync.Mutex
-				requests := 0
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					mu.Lock()
-					defer mu.Unlock()
-					requests++
-					metadata, _ := base64.RawURLEncoding.DecodeString(r.Header.Get("x-request"))
-					signature, _ := base64.RawURLEncoding.DecodeString(r.Header.Get("x-hash"))
-					public, _ := base64.RawURLEncoding.DecodeString(r.Header.Get("x-seed"))
-					if !ed25519.Verify(public, metadata, signature) {
-						t.Error("invalid signature")
-						w.WriteHeader(400)
-						return
+func desktopRequest(t *testing.T, r *http.Request, key []byte) (map[int]uint64, []byte, map[string]json.RawMessage) {
+	t.Helper()
+	metadata, _ := base64.RawURLEncoding.DecodeString(r.Header.Get("x-request"))
+	signature, _ := base64.RawURLEncoding.DecodeString(r.Header.Get("x-hash"))
+	public, _ := base64.RawURLEncoding.DecodeString(r.Header.Get("x-seed"))
+	if !ed25519.Verify(public, metadata, signature) {
+		t.Error("invalid request signature")
+	}
+	fields, _ := decodeProto(t, metadata)
+	if r.Header.Get("x-device") != "1" || r.Header.Get("x-client") != "11" ||
+		r.Header.Get("x-version") != "1.1770619133615.0" || fields[1] != xxh3.Hash(public) ||
+		fields[2] != 1 || fields[3] != 1 {
+		t.Error("request did not use the desktop contract")
+	}
+	body, _ := io.ReadAll(r.Body)
+	aad := nativewire.BindingDigest(fields[6], fields[8], fields[1], nativewire.DefaultProtocolVersion)
+	plain, err := nativewire.OpenBusiness(key, aad, body, nativewire.Limit)
+	if err != nil || xxh3.Hash(plain) != fields[8] {
+		t.Error("invalid desktop encrypted request")
+	}
+	var params map[string]json.RawMessage
+	if json.Unmarshal(plain, &params) != nil {
+		t.Error("invalid parameters")
+	}
+	for _, name := range []string{"version", "appVersion", "appHash"} {
+		if _, exists := params[name]; exists {
+			t.Error("mobile APK identity leaked into desktop authentication")
+		}
+	}
+	return fields, public, params
+}
+
+func TestSignedDesktopLogin(t *testing.T) {
+	for _, wrongBinding := range []bool{false, true} {
+		t.Run(map[bool]string{false: "valid", true: "wrong-correlation"}[wrongBinding], func(t *testing.T) {
+			d := syntheticDeployment()
+			serverPrivate := make([]byte, 32)
+			serverPrivate[0] = 17
+			serverPublic, _ := curve25519.X25519(serverPrivate, curve25519.Basepoint)
+			d.ServerKey = base64.StdEncoding.EncodeToString(serverPublic)
+			// An imported profile cannot override the desktop identity headers.
+			d.Headers = map[string]string{"x-device": "3", "x-client": "2", "x-version": "mobile"}
+			key, _ := decodeKey(d.BodyKey)
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				_, public, params := desktopRequest(t, r, key)
+				var data any
+				switch r.URL.Path {
+				case "/v1/user/login":
+					if len(params) != 4 || string(params["account"]) != `"synthetic"` ||
+						string(params["passwd"]) != `"not-real"` ||
+						string(params["validateStr"]) != `"synthetic-human"` ||
+						string(params["type"]) != `"LOGIN_TYPE_ACCOUNT_PWD"` {
+						t.Error("password login payload differs from the desktop contract")
 					}
-					fields, _ := decodeProto(t, metadata)
-					version := nativewire.DefaultProtocolVersion
-					if protocol == "3.7.3" {
-						version = 1703240058615
-					} else if protocol == "3.7.4" {
-						version = 1703240058617
-						device, _ := murmur3.Sum128(public)
-						if int64(device) < 0 {
-							device = -device
-						}
-						if fields[1] != device || r.Header.Get("x-version") != "1.1703240058617.0" {
-							t.Error("current device hash or protocol version mismatch")
-						}
-					}
-					material := make([]byte, 32)
-					binary.LittleEndian.PutUint64(material, fields[6])
-					binary.LittleEndian.PutUint64(material[8:], fields[8])
-					binary.LittleEndian.PutUint64(material[16:], fields[1])
-					binary.LittleEndian.PutUint64(material[24:], version)
-					hash := xxh3.Hash128(material)
-					aad := make([]byte, 16)
-					binary.LittleEndian.PutUint64(aad, hash.Lo)
-					binary.LittleEndian.PutUint64(aad[8:], hash.Hi)
-					body, _ := io.ReadAll(r.Body)
-					plain, err := nativewire.OpenBusiness(key, aad, body, nativewire.Limit)
+					exchange, _ := base64.RawURLEncoding.DecodeString(r.Header.Get("x-context"))
+					opened, err := nativewire.OpenSealedBox(serverPrivate, exchange)
 					if err != nil {
-						t.Error("invalid encrypted request")
+						t.Error("invalid sealed exchange")
 						w.WriteHeader(400)
 						return
 					}
-					var params map[string]json.RawMessage
-					if json.Unmarshal(plain, &params) != nil {
-						t.Error("invalid params")
+					ef, ep := decodeProto(t, opened)
+					if string(ep[3]) != string(public) || ef[2] != 1 {
+						t.Error("exchange identity is not desktop")
 					}
-					if protocol == "3.7.4" {
-						digest, _ := murmur3.Sum128(plain)
-						if digest != fields[8] || fields[2] != 3 || fields[3] != 1 || fields[13] != 1 {
-							t.Error("current metadata does not match official SDK")
-						}
+					correlation := ef[5]
+					if wrongBinding {
+						correlation++
 					}
-					var data any
-					switch r.URL.Path {
-					case "/v1/user/login":
-						if protocol == "3.7.4" && (string(params["version"]) != `"3.7.4"` ||
-							string(params["appVersion"]) != "337" || string(params["appHash"]) != `"`+android374AppHash+`"`) {
-							t.Error("current APK identity is missing")
-						}
-						exchange, _ := base64.RawURLEncoding.DecodeString(r.Header.Get("x-context"))
-						opened, err := nativewire.OpenSealedBox(serverPrivate, exchange)
-						if err != nil {
-							t.Error("invalid sealed exchange")
-							w.WriteHeader(400)
-							return
-						}
-						ef, ep := decodeProto(t, opened)
-						if string(ep[3]) != string(public) {
-							t.Error("exchange signer mismatch")
-						}
-						reply := map[string]any{"uid": 123, "nimId": "synthetic-peer", "jwtToken": "synthetic-jwt", "nimToken": "legacy-im",
-							"nickName": "synthetic", "safeCodeRequired": protocol != "3.7.1", "safeCodeSet": true}
-						if !modern {
-							var token []byte
-							correlation := ef[5]
-							if wrongBinding {
-								correlation++
-							}
-							for _, value := range []struct {
-								n protowire.Number
-								v uint64
-							}{{1, ef[4]}, {2, correlation}, {5, 7}, {6, 123}} {
-								token = protowire.AppendTag(token, value.n, protowire.VarintType)
-								token = protowire.AppendVarint(token, value.v)
-							}
-							token = protowire.AppendTag(token, 4, protowire.BytesType)
-							token = protowire.AppendBytes(token, make([]byte, 16))
-							_, signing, _ := nativewire.SigningKeypair(make([]byte, 32))
-							curve, _ := nativewire.CurvePrivate(signing)
-							curvePublic, _ := curve25519.X25519(curve, curve25519.Basepoint)
-							sealed, _ := nativewire.SealBox(curvePublic, token)
-							reply["token"] = base64.RawURLEncoding.EncodeToString(sealed)
-						}
-						data = reply
-					case "/v1/user/verify_safe_code":
-						if string(params["code"]) != `"123456"` {
-							t.Error("security code missing")
-						}
-						w.Header().Set("x-set-jwt", "rotated-synthetic-jwt")
-						data = map[string]any{}
-					case "/v1/user/get-nim-token":
-						if r.Header.Get("x-jwt") != "rotated-synthetic-jwt" {
-							t.Error("JWT rotation not installed")
-						}
-						data = map[string]any{"nimToken": "synthetic-im", "kind": "NIM_LOGIN_KIND_DYNAMIC"}
-					default:
-						t.Error("unexpected route")
-						w.WriteHeader(404)
-						return
+					var token []byte
+					for _, value := range []struct {
+						n protowire.Number
+						v uint64
+					}{{1, ef[4]}, {2, correlation}, {5, 7}, {6, 123}} {
+						token = protowire.AppendTag(token, value.n, protowire.VarintType)
+						token = protowire.AppendVarint(token, value.v)
 					}
-					json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": data})
-				}))
-				defer server.Close()
-				value, err := NewClient(d)
-				if err != nil {
-					t.Fatal(err)
-				}
-				c := value.(*Client)
-				c.config.Origin = server.URL
-				c.http = server.Client()
-				defer c.Close()
-				err = c.Login(context.Background(), map[string]any{"account": "synthetic", "passwd": "not-real", "validateStr": "synthetic-human", "type": "LOGIN_TYPE_ACCOUNT_PWD"})
-				if wrongBinding {
-					if err == nil || c.jwt != "" {
-						t.Fatal("accepted unbound login token")
+					token = protowire.AppendTag(token, 4, protowire.BytesType)
+					token = protowire.AppendBytes(token, make([]byte, 16))
+					_, signing, _ := nativewire.SigningKeypair(make([]byte, 32))
+					curve, _ := nativewire.CurvePrivate(signing)
+					clear(signing)
+					curvePublic, _ := curve25519.X25519(curve, curve25519.Basepoint)
+					clear(curve)
+					sealed, _ := nativewire.SealBox(curvePublic, token)
+					data = map[string]any{"uid": 123, "nimId": "synthetic-peer", "jwtToken": "synthetic-jwt",
+						"token":    base64.RawURLEncoding.EncodeToString(sealed),
+						"nickName": "synthetic", "safeCodeRequired": true, "safeCodeSet": true}
+				case "/v1/user/verify_safe_code":
+					if string(params["code"]) != `"123456"` {
+						t.Error("security code missing")
 					}
+					w.Header().Set("x-set-jwt", "rotated-synthetic-jwt")
+					data = map[string]any{}
+				case "/v1/user/get-nim-token":
+					if r.Header.Get("x-jwt") != "rotated-synthetic-jwt" {
+						t.Error("JWT rotation was lost")
+					}
+					data = map[string]any{"nimToken": "synthetic-im", "kind": "NIM_LOGIN_KIND_DYNC"}
+				default:
+					t.Error("unexpected route")
+					w.WriteHeader(404)
 					return
 				}
-				if err != nil {
-					t.Fatal(err)
+				json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": data})
+			}))
+			defer server.Close()
+			value, err := NewClient(d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := value.(*Client)
+			c.config.Origin, c.http = server.URL, server.Client()
+			defer c.Close()
+			err = c.Login(context.Background(), map[string]any{"account": "synthetic", "passwd": "not-real",
+				"validateStr": "synthetic-human", "type": "LOGIN_TYPE_ACCOUNT_PWD"})
+			if wrongBinding {
+				if err == nil || c.jwt != "" || calls.Load() != 1 {
+					t.Fatal("accepted an unbound desktop login token")
 				}
-				if c.SecurityRequired() {
-					if _, _, err = c.Finish(context.Background()); err == nil {
-						t.Fatal("security gate bypassed")
-					}
-					if err = c.VerifySecurity(context.Background(), "123456"); err != nil {
-						t.Fatal(err)
-					}
-				}
-				saved, nick, err := c.Finish(context.Background())
-				if err != nil || saved.UID != 123 || saved.NIMID != "synthetic-peer" || nick != "synthetic" {
-					t.Fatal("invalid session", err)
-				}
-				if protocol != "3.7.1" && (saved.NIMAuthType != 1 || saved.JWT != "rotated-synthetic-jwt") {
-					t.Fatal("invalid current session")
-				}
-				mu.Lock()
-				count := requests
-				mu.Unlock()
-				if protocol != "3.7.1" && count != 3 {
-					t.Fatal("unexpected request count", count)
-				}
-			})
-		}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err = c.Finish(context.Background()); err == nil {
+				t.Fatal("secondary security was bypassed")
+			}
+			if err = c.VerifySecurity(context.Background(), "123456"); err != nil {
+				t.Fatal(err)
+			}
+			saved, nick, err := c.Finish(context.Background())
+			if err != nil || saved.UID != 123 || saved.NIMID != "synthetic-peer" || nick != "synthetic" ||
+				saved.ProtocolVersion != DesktopProtocolVersion || saved.NIMAuthType != 1 ||
+				saved.JWT != "rotated-synthetic-jwt" || calls.Load() != 3 {
+				t.Fatal("invalid desktop session", err)
+			}
+		})
 	}
 }
 
-func TestSignedAnonymousRegistrationUsesOfficialRoute(t *testing.T) {
+func TestSignedDesktopAnonymousRegistration(t *testing.T) {
 	d := syntheticDeployment()
 	key, _ := decodeKey(d.BodyKey)
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if r.URL.Path != "/v1/user/register" || r.Header.Get("x-context") != "" || r.Header.Get("x-jwt") != "" {
-			t.Error("registration was routed through the login exchange")
+		fields, _, params := desktopRequest(t, r, key)
+		if r.URL.Path != "/v1/user/register" || r.Header.Get("x-context") != "" ||
+			r.Header.Get("x-jwt") != "" || fields[4] != 0 {
+			t.Error("registration carried a user session or login exchange")
 		}
-		metadata, _ := base64.RawURLEncoding.DecodeString(r.Header.Get("x-request"))
-		signature, _ := base64.RawURLEncoding.DecodeString(r.Header.Get("x-hash"))
-		public, _ := base64.RawURLEncoding.DecodeString(r.Header.Get("x-seed"))
-		if !ed25519.Verify(public, metadata, signature) {
-			t.Error("registration signature invalid")
-		}
-		fields, _ := decodeProto(t, metadata)
-		material := make([]byte, 32)
-		binary.LittleEndian.PutUint64(material, fields[6])
-		binary.LittleEndian.PutUint64(material[8:], fields[8])
-		binary.LittleEndian.PutUint64(material[16:], fields[1])
-		binary.LittleEndian.PutUint64(material[24:], 1703240058615)
-		hash := xxh3.Hash128(material)
-		aad := make([]byte, 16)
-		binary.LittleEndian.PutUint64(aad, hash.Lo)
-		binary.LittleEndian.PutUint64(aad[8:], hash.Hi)
-		body, _ := io.ReadAll(r.Body)
-		plain, err := nativewire.OpenBusiness(key, aad, body, nativewire.Limit)
-		if err != nil {
-			t.Error("registration encryption invalid", err)
-		}
-		var params map[string]any
-		if json.Unmarshal(plain, &params) != nil || params["password"] != "synthetic1" || params["passwd"] != nil ||
-			params["key"] != "synthetic-key" || params["nickName"] != "synthetic" {
+		if string(params["password"]) != `"synthetic1"` || params["passwd"] != nil ||
+			string(params["key"]) != `"synthetic-key"` || params["nickName"] != nil || len(params) != 5 {
 			t.Error("registration payload mismatch")
+		}
+		var phone map[string]string
+		if json.Unmarshal(params["phone"], &phone) != nil || len(phone) != 3 ||
+			phone["countryCode"] != "86" || phone["nationalNumber"] != "13800000000" ||
+			phone["maskedNationalNumber"] != "138****0000" {
+			t.Error("desktop phone contract mismatch")
 		}
 		json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]any{"accountId": 456}})
 	}))
@@ -270,112 +221,176 @@ func TestSignedAnonymousRegistrationUsesOfficialRoute(t *testing.T) {
 	c.config.Origin, c.http = server.URL, server.Client()
 	defer c.Close()
 	result, err := c.Request(context.Background(), "/v1/user/register", map[string]any{
-		"password": "synthetic1", "key": "synthetic-key", "nickName": "synthetic",
-		"phone":       map[string]any{"countryCode": 86, "nationalNumber": 13800000000, "maskedNationalNumber": ""},
+		"password": "synthetic1", "key": "synthetic-key",
+		"phone":       map[string]any{"countryCode": "86", "nationalNumber": "13800000000", "maskedNationalNumber": "138****0000"},
 		"validateStr": "synthetic-human", "verificationCode": "123456",
 	})
 	if err != nil || string(result["accountId"]) != "456" || c.jwt != "" || calls.Load() != 1 {
-		t.Fatal("registration did not return a separate account identity", err)
+		t.Fatal("registration did not remain separate from authentication", err)
 	}
 }
 
-func TestAndroid374NativeContextVector(t *testing.T) {
-	d := syntheticDeployment()
-	d.ProtocolVersion = "3.7.4"
-	private := make([]byte, 32)
-	private[0] = 17
-	public, _ := curve25519.X25519(private, curve25519.Basepoint)
-	d.ServerKey = base64.StdEncoding.EncodeToString(public)
-	value, err := NewClient(d)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c := value.(*Client)
-	defer c.Close()
-	for i := range c.public {
-		c.public[i] = byte(i)
-	}
-	c.fields[0] = 99
-	contextBytes, err := c.exchangeContext(3, 1700000000123456789)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plain, err := nativewire.OpenSealedBox(private, contextBytes)
-	// Produced by emulating the pinned APK's serializer at libcore.so+0x2dae4.
-	expected := "086310031a20000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2080e2cfaa0628959a97ece39fe7cb173001"
-	if err != nil || hex.EncodeToString(plain) != expected {
-		t.Fatal("official context serializer mismatch", err)
-	}
-}
-
-func TestAndroid374SignupHasDeviceContextButNoUserSession(t *testing.T) {
-	d := syntheticDeployment()
-	d.ProtocolVersion = "3.7.4"
-	private := make([]byte, 32)
-	private[0] = 17
-	public, _ := curve25519.X25519(private, curve25519.Basepoint)
-	d.ServerKey = base64.StdEncoding.EncodeToString(public)
-	key, _ := decodeKey(d.BodyKey)
-	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		metadata, _ := base64.RawURLEncoding.DecodeString(r.Header.Get("x-request"))
-		signature, _ := base64.RawURLEncoding.DecodeString(r.Header.Get("x-hash"))
-		signer, _ := base64.RawURLEncoding.DecodeString(r.Header.Get("x-seed"))
-		if !ed25519.Verify(signer, metadata, signature) {
-			t.Error("invalid signature")
-		}
-		fields, _ := decodeProto(t, metadata)
-		if fields[4] != 0 || r.Header.Get("x-jwt") != "" || r.Header.Get("x-id") != "" {
-			t.Error("registration carried a user session")
-		}
-		contextBytes, _ := base64.RawURLEncoding.DecodeString(r.Header.Get("x-context"))
-		data := map[string]any{"key": "synthetic-challenge"}
-		switch r.URL.Path {
-		case "/v1/verify/sms-anon":
-			if len(contextBytes) != 0 {
-				t.Error("SMS unexpectedly carried an account context")
-			}
-		case "/v1/user/register":
-			opened, err := nativewire.OpenSealedBox(private, contextBytes)
+func TestDesktopRejectionIsScopedAndNotRetried(t *testing.T) {
+	for _, test := range []struct {
+		number               int
+		route, message, want string
+	}{
+		{1001, "/v1/user/register", "", "native_signup_rejected_unspecified"},
+		{1001, "/v1/verify/sms-anon", "", "native_sms_rejected_unspecified"},
+		{1001, "/v1/user/login", "", "native_login_rejected_unspecified"},
+		{1001, "/v1/user/register", "短信验证码错误", "native_invalid_sms"},
+		{1001, "/v1/user/register", "synthetic-secret-and-phone", "native_signup_rejected_unspecified"},
+		{-1, "/v1/user/login", "", "native_login_rejected_unspecified"},
+		{-1, "/v1/user/login", "账号或密码错误，请重新输入", "native_invalid_credentials"},
+		{-1, "/v1/user/login", "账号或密码错误, 请重新输入", "native_invalid_credentials"},
+		{-1, "/v1/user/login", "synthetic-secret-and-phone", "native_login_rejected_unspecified"},
+		{-1, "/v1/verify/sms-anon", "", "native_sms_rejected_unspecified"},
+	} {
+		t.Run(test.want+test.message, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if r.URL.Path != test.route {
+					t.Error("unexpected request route")
+				}
+				json.NewEncoder(w).Encode(map[string]any{"code": test.number, "msg": test.message})
+			}))
+			defer server.Close()
+			value, err := NewClient(syntheticDeployment())
 			if err != nil {
-				t.Error("registration is missing the official sealed context")
-			} else {
-				contextFields, blobs := decodeProto(t, opened)
-				if contextFields[1] != fields[1] || contextFields[2] != 3 ||
-					contextFields[6] != 1 || !bytes.Equal(blobs[3], signer) {
-					t.Error("registration context is not bound to the signing device")
+				t.Fatal(err)
+			}
+			c := value.(*Client)
+			defer c.Close()
+			c.config.Origin, c.http = server.URL, server.Client()
+			_, err = c.Request(context.Background(), test.route, map[string]any{})
+			native, ok := err.(*Error)
+			_, diagnostic := authBusinessRejection(test.route, nil, test.number, test.message)
+			if !ok || native.Code != test.want || native.Number != test.number || !native.Submitted ||
+				calls.Load() != 1 || native.Diagnostic != diagnostic || native.Error() == test.message {
+				t.Fatal("generic rejection lost scope or retried", err)
+			}
+		})
+	}
+}
+
+func TestRegistrationSMSDiagnosticsAndCooldownNeverRetry(t *testing.T) {
+	for _, number := range []int{1001, 1000, 1002, 1036, 1037, 1038, 1040, 1043, 1044, 1200, 1201} {
+		t.Run(strconv.Itoa(number), func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if r.URL.Path != "/v1/verify/sms-anon" {
+					t.Error("unexpected diagnostic route")
+				}
+				json.NewEncoder(w).Encode(map[string]any{"code": number,
+					"msg": "手机号13800000000 验证码123456 token=synthetic-ticket"})
+			}))
+			defer server.Close()
+			value, err := NewClient(syntheticDeployment())
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := value.(*Client)
+			defer c.Close()
+			c.config.Origin, c.http = server.URL, server.Client()
+			params := map[string]any{"ty": "VERIFY_FOR_REGISTER"}
+			_, err = c.Request(context.Background(), "/v1/verify/sms-anon", params)
+			native, ok := err.(*Error)
+			want, diagnostic := authBusinessRejection("/v1/verify/sms-anon", params, number, "unrecognized")
+			if !ok || native.Code != want || native.Diagnostic != diagnostic ||
+				native.Number != number || !native.Submitted || calls.Load() != 1 {
+				t.Fatal("SMS error classification or request count changed", err)
+			}
+			raw, _ := json.Marshal(native)
+			if bytes.Contains(raw, []byte("13800000000")) || bytes.Contains(raw, []byte("123456")) ||
+				bytes.Contains(raw, []byte("synthetic-ticket")) {
+				t.Fatal("raw provider content leaked")
+			}
+			if number == 1038 || number == 1043 {
+				if native.RetryAfter <= 0 {
+					t.Fatal("missing local cooldown")
+				}
+				_, err = c.Request(context.Background(), "/v1/verify/sms-anon", params)
+				if err == nil || calls.Load() != 1 {
+					t.Fatal("SMS request escaped cooldown")
 				}
 			}
-			data = map[string]any{"accountId": 456}
-		default:
-			t.Error("unexpected route")
-		}
-		aad := nativewire.BindingDigest(fields[6], fields[8], fields[1], 1703240058617)
-		body, _ := io.ReadAll(r.Body)
-		plain, err := nativewire.OpenBusiness(key, aad, body, nativewire.Limit)
-		digest, _ := murmur3.Sum128(plain)
-		if err != nil || digest != fields[8] {
-			t.Error("request hash is not Murmur3", err)
-		}
-		reply, _ := json.Marshal(map[string]any{"code": 0, "data": data})
-		sealed, _ := nativewire.SealBusinessDigest(key, fields[6], reply, fields[8], fields[1], 1703240058617)
-		w.Write(sealed)
-	}))
-	defer server.Close()
-	value, err := NewClient(d)
-	if err != nil {
-		t.Fatal(err)
+		})
 	}
-	c := value.(*Client)
-	c.config.Origin, c.http = server.URL, server.Client()
-	defer c.Close()
-	if _, err = c.Request(context.Background(), "/v1/verify/sms-anon", map[string]any{"ty": "VERIFY_FOR_REGISTER"}); err != nil {
-		t.Fatal(err)
+}
+
+func TestSMSStructuredRejectionsPreserveBusinessCodeAndNeverRetry(t *testing.T) {
+	for _, test := range []struct {
+		body, code, diagnostic string
+		number                 int
+	}{
+		{`{"code":1001,"msg":{"phone":"13800000000","ticket":"synthetic-secret"},"data":[]}`,
+			"native_sms_rejected_unspecified", "provider_reason_nontext", 1001},
+		{`{"code":1038,"msg":["123456"],"data":"synthetic-secret"}`,
+			"native_sms_rate_limited", "provider_code_classified", 1038},
+		{`{"code":1001,"msg":null}`, "native_sms_rejected_unspecified", "provider_reason_empty", 1001},
+		{`{"code":1001}`, "native_sms_rejected_unspecified", "provider_reason_empty", 1001},
+		{`{"code":0,"msg":[],"data":{}}`, "native_response_invalid", "", 0},
+		{`{"code":0,"msg":"","data":[]}`, "native_response_invalid", "", 0},
+		{`{"code":"1001","msg":""}`, "native_response_invalid", "", 0},
+	} {
+		t.Run(test.code+test.diagnostic+test.body, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if r.URL.Path != "/v1/verify/sms-anon" {
+					t.Error("unexpected route")
+				}
+				_, _ = io.WriteString(w, test.body)
+			}))
+			defer server.Close()
+			value, err := NewClient(syntheticDeployment())
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := value.(*Client)
+			defer c.Close()
+			c.config.Origin, c.http = server.URL, server.Client()
+			_, err = c.Request(context.Background(), "/v1/verify/sms-anon", map[string]any{"ty": "VERIFY_FOR_REGISTER"})
+			native, ok := err.(*Error)
+			if !ok || native.Code != test.code || native.Number != test.number ||
+				native.Diagnostic != test.diagnostic || !native.Submitted || calls.Load() != 1 {
+				t.Fatal("structured rejection lost diagnostics or retried", err)
+			}
+			raw, _ := json.Marshal(native)
+			for _, secret := range []string{"13800000000", "123456", "synthetic-secret"} {
+				if bytes.Contains(raw, []byte(secret)) || bytes.Contains([]byte(native.Error()), []byte(secret)) {
+					t.Fatal("structured provider reason escaped")
+				}
+			}
+		})
 	}
-	if _, err = c.Request(context.Background(), "/v1/user/register", map[string]any{"password": "synthetic1"}); err != nil ||
-		c.jwt != "" || c.fields[3] != 0 || c.identity != nil || calls.Load() != 2 {
-		t.Fatal("registration was incorrectly treated as an authenticated login", err)
+}
+
+func TestNonAuthRejectionsRetainStrictEnvelope(t *testing.T) {
+	for _, body := range []string{
+		`{"code":1001,"msg":{"token":"synthetic-secret"},"data":{}}`,
+		`{"code":1001,"msg":"","data":[]}`,
+	} {
+		var calls atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			_, _ = io.WriteString(w, body)
+		}))
+		value, err := NewClient(syntheticDeployment())
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := value.(*Client)
+		c.config.Origin, c.http = server.URL, server.Client()
+		_, err = c.Request(context.Background(), "/v1/settings/get-sys-cfg", nil)
+		c.Close()
+		server.Close()
+		native, ok := err.(*Error)
+		if !ok || native.Code != "native_response_invalid" || !native.Submitted || calls.Load() != 1 {
+			t.Fatal("authentication diagnostics changed non-auth contract", err)
+		}
 	}
 }
 
@@ -393,8 +408,7 @@ func TestNative429IsNotRetried(t *testing.T) {
 		w.WriteHeader(429)
 	}))
 	defer server.Close()
-	c.config.Origin = server.URL
-	c.http = server.Client()
+	c.config.Origin, c.http = server.URL, server.Client()
 	for range 2 {
 		if _, err = c.Request(context.Background(), "/v1/verify/sms-anon", map[string]any{}); err == nil {
 			t.Fatal("accepted 429")
@@ -430,11 +444,10 @@ func TestUnverifiableNativeReplyIsNotSuccess(t *testing.T) {
 			c.config.Origin, c.http = server.URL, server.Client()
 			_, err = c.Request(context.Background(), "/v1/verify/sms-anon", map[string]any{})
 			native, ok := err.(*Error)
-			if !ok || !native.Submitted || (native.Code != "native_transport_unknown" && native.Code != "native_response_invalid") {
-				t.Fatal("unverifiable request not classified as submitted/unknown")
-			}
-			if calls.Load() != 1 {
-				t.Fatal("request automatically retried")
+			if !ok || !native.Submitted ||
+				(native.Code != "native_transport_unknown" && native.Code != "native_response_invalid") ||
+				calls.Load() != 1 {
+				t.Fatal("unknown native result became success or was retried")
 			}
 		})
 	}

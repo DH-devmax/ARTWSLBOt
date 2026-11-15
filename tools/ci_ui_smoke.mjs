@@ -1,58 +1,60 @@
+// A fresh wsl_test website session only; detailed regressions use the CI registry.
 import { chromium } from 'playwright'
-import { readFile, mkdir } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { createServer, request } from 'node:http'
-import vm from 'node:vm'
 
 const root = '/workspace'
-await mkdir('/tmp/output/playwright', { recursive: true })
-process.chdir('/tmp')
-// Keep browser origin identical to PUBLIC_ORIGIN without host networking.
-// The only upstream is the private Compose web service.
+if (process.env.CI !== 'true') throw Error('Isolated CI stack required')
+const sessionFile = `${root}/var/ci-website-session.json`
+if (((await stat(sessionFile)).mode & 0o777) !== 0o600) throw Error('Private CI session required')
+const session = JSON.parse(await readFile(sessionFile, 'utf8'))
+if (session.username !== 'synthetic-smoke-admin' ||
+    !/^[A-Za-z0-9_-]{43}$/.test(session.session_token) ||
+    !/^[A-Za-z0-9_-]{43}$/.test(session.csrf_token) ||
+    Date.parse(session.expires_at) <= Date.now()) throw Error('Invalid synthetic CI session')
 const proxy = createServer((incoming, outgoing) => {
+  // This check reads website state. It never forwards a mutation.
+  if (!['GET', 'HEAD'].includes(incoming.method)) {
+    outgoing.writeHead(405)
+    return outgoing.end()
+  }
   const upstream = request({
-    hostname: 'web', port: 8080, method: incoming.method,
-    path: incoming.url, headers: incoming.headers
-  }, (response) => {
+    hostname: 'web', port: 8080, method: incoming.method, path: incoming.url,
+    headers: incoming.headers
+  }, response => {
     outgoing.writeHead(response.statusCode, response.headers)
     response.pipe(outgoing)
   })
   upstream.on('error', () => { outgoing.writeHead(502); outgoing.end() })
   incoming.pipe(upstream)
 })
-await new Promise((resolve) => proxy.listen(5173, '127.0.0.1', resolve))
-const env = Object.fromEntries(
-  (await readFile(`${root}/.env`, 'utf8'))
-    .split('\n')
-    .filter((line) => line.includes('=') && !line.startsWith('#'))
-    .map((line) => {
-      const index = line.indexOf('=')
-      return [line.slice(0, index), line.slice(index + 1)]
-    })
-)
+await new Promise(resolve => proxy.listen(5173, '127.0.0.1', resolve))
 const browser = await chromium.launch({
-  headless: true,
-  executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+  headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
 })
 try {
   const page = await browser.newPage()
-  await page.goto('http://127.0.0.1:5173')
-  await page.getByRole('textbox', { name: '用户名', exact: true }).fill(env.BOOTSTRAP_USERNAME)
-  await page.getByRole('textbox', { name: '密码', exact: true }).fill(env.BOOTSTRAP_PASSWORD)
-  await page.getByRole('button', { name: '登录', exact: true }).click()
-  await page.getByRole('heading', { name: '工作台', exact: true }).waitFor()
-  for (const name of ['ui_smoke.js', 'workspaces_ui_smoke.js', 'go_console_live_smoke.js', 'go_console_ui_smoke.js', 'account_removal_ui_smoke.js', 'account_dashboard_ui_smoke.js', 'native_auth_error_ui_smoke.js', 'native_receiver_ui_smoke.js']) {
-    console.log(`Browser check: ${name}`)
-    const source = await readFile(`${root}/tools/${name}`, 'utf8')
-    const run = vm.runInThisContext(`(${source})`, { filename: name })
-    const result = await run(page)
-    console.log(JSON.stringify({ check: name, ...result }))
+  await page.context().addCookies([
+    { name: 'wsl_session', value: session.session_token, url: 'http://127.0.0.1:5173', httpOnly: true, sameSite: 'Strict' },
+    { name: 'wsl_csrf', value: session.csrf_token, url: 'http://127.0.0.1:5173', sameSite: 'Strict' }
+  ])
+  const response = await page.request.get('http://127.0.0.1:5173/api/v1/me')
+  const principal = (await response.json()).data?.user
+  if (!response.ok() || principal?.id !== session.user_id ||
+      principal?.role !== 'superadmin' || principal?.username !== session.username) {
+    throw Error('Synthetic session was not authenticated')
   }
+  await page.goto('http://127.0.0.1:5173')
+  await page.getByRole('heading', { name: '工作台', exact: true }).waitFor()
+  console.log(JSON.stringify({
+    check: 'authenticated_container_ui', passed: true, database: 'wsl_test',
+    synthetic_only: true, native_actions: 0, model_calls: 0
+  }))
 } catch {
-  // UI traces can include filled secrets; don't dump browser/source state here.
-  console.error('Docker browser acceptance failed; inspect the named check and safe screenshots.')
+  console.error('Isolated authenticated browser check failed.')
   process.exitCode = 1
 } finally {
   await browser.close()
   proxy.closeAllConnections()
-  await new Promise((resolve) => proxy.close(resolve))
+  await new Promise(resolve => proxy.close(resolve))
 }

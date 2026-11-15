@@ -1,0 +1,84 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Official verification</title>
+<style>body{margin:0;font:14px system-ui;color:#606266}#status{text-align:center;padding:20px}</style>
+</head><body>
+<div id="status" role="status">正在加载官方验证</div>
+<div id="captcha"></div><button id="trigger" hidden type="button"></button>
+<script>
+'use strict';
+// Opaque sandbox: reuse only the SDK, never solved proofs. Each attempt has
+// a parent-issued ID; vendor code cannot access site cookies or the parent DOM.
+let active = null, loader, origin = '';
+const send = (job, type, value = '') => parent.postMessage(
+  {source:'artwsl-lajiao-captcha',id:job?.id || '',type,value},origin || '*');
+function stop() {
+  const job = active;
+  active = null;
+  if (!job) return;
+  clearTimeout(job.timer);
+  job.instance?.destroy?.();
+  document.getElementById('captcha').replaceChildren();
+}
+function finish(job, type, value) {
+  if (active !== job) return;
+  stop();
+  send(job,type,value);
+}
+function load() {
+  if (typeof window.initAliyunCaptcha === 'function') return Promise.resolve();
+  return loader ||= new Promise((resolve,reject) => {
+    const script = document.createElement('script');
+    const fail = () => {clearTimeout(timer);script.remove();reject(Error('load'));};
+    const timer = setTimeout(fail,15000);
+    script.src = 'https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js';
+    script.async = true;
+    script.onload = () => {clearTimeout(timer);typeof window.initAliyunCaptcha === 'function' ? resolve() : fail();};
+    script.onerror = fail;
+    document.head.append(script);
+  }).catch(error => {loader=undefined;throw error;});
+}
+addEventListener('message', async event => {
+  const data = event.data;
+  if (event.source !== parent || data?.source !== 'artwsl-lajiao-login' ||
+      !/^[a-f0-9-]{36}$/.test(data.id) || (origin && event.origin !== origin)) return;
+  if (data.action === 'cancel') {
+    if (active?.id === data.id) stop();
+    return;
+  }
+  if (active?.id === data.id) return;
+  stop();
+  origin = event.origin;
+  const job = {id:data.id}, c = data.challenge;
+  active = job;
+  job.timer = setTimeout(() => finish(job,'failed'),120000);
+  const status = document.getElementById('status');
+  status.textContent = '正在加载官方验证';
+  try {
+    if (!c?.required || ![c.prefix,c.region,c.scene_id].every(x => typeof x === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(x))) throw Error();
+    window.AliyunCaptchaConfig = {region:c.region,prefix:c.prefix};
+    await load();
+    if (active !== job) return;
+    window.initAliyunCaptcha({
+      SceneId:c.scene_id,mode:'popup',element:'#captcha',button:'#trigger',language:'cn',
+      slideStyle:{width:Math.max(180,Math.min(360,innerWidth-32)),height:40},
+      success:value => {
+        if (typeof value !== 'string' || !value || value.length>32768) return finish(job,'failed');
+        finish(job,'success',value);
+      },
+      fail:() => {if(active===job)status.textContent='验证未通过，请在当前滑块重试';},
+      onClose:() => finish(job,'cancelled'),
+      getInstance:instance => {
+        if (active !== job) return instance?.destroy?.();
+        job.instance = instance;
+        status.textContent = '';
+        if (typeof instance?.show === 'function') instance.show();
+        else document.getElementById('trigger').click();
+      }
+    });
+  } catch (_) {finish(job,'failed');}
+});
+if (parent !== window) send(null,'ready');
+addEventListener('pagehide',stop);
+</script></body></html>

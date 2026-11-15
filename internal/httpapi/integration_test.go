@@ -32,6 +32,10 @@ type testClient struct {
 }
 
 func (c testClient) request(method, path string, body any) (int, json.RawMessage, string) {
+	return c.requestWithCaptcha(method, path, body, nil)
+}
+
+func (c testClient) requestRaw(method, path string, body any, headers ...http.Header) (int, json.RawMessage, string) {
 	var input io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
@@ -47,6 +51,20 @@ func (c testClient) request(method, path string, body any) (int, json.RawMessage
 	for _, cookie := range c.client.Jar.Cookies(u) {
 		if cookie.Name == "wsl_csrf" {
 			req.Header.Set("X-CSRF-Token", cookie.Value)
+		}
+	}
+	for _, extra := range headers {
+		for name, values := range extra {
+			if strings.EqualFold(name, "Host") {
+				if len(values) > 0 {
+					req.Host = values[0]
+				}
+			} else {
+				req.Header.Del(name)
+				for _, value := range values {
+					req.Header.Add(name, value)
+				}
+			}
 		}
 	}
 	resp, err := c.client.Do(req)
@@ -69,6 +87,11 @@ func expect(t *testing.T, c testClient, method, path string, body any, status in
 		t.Fatalf("%s %s: got %d (%s), want %d", method, path, actual, msg, status)
 	}
 	return data
+}
+
+func reloginMessageFixture(t *testing.T, c testClient) {
+	t.Helper()
+	expect(t, c, "POST", "/auth/login", map[string]string{"username": "message-admin", "password": "synthetic-conversation-password"}, 200)
 }
 
 func field(t *testing.T, b json.RawMessage, key string) string {
@@ -160,7 +183,7 @@ func TestPostgresWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	vault, _ := security.NewVault(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{3}, 32)))
-	server := httptest.NewServer(New(db, vault, "http://127.0.0.1:5173", false).Handler())
+	server := httptest.NewServer(newCaptchaTestServer(db, vault, "http://127.0.0.1:5173", false).Handler())
 	t.Cleanup(server.Close)
 	client := func(username string) testClient {
 		jar, _ := cookiejar.New(nil)
@@ -183,13 +206,18 @@ func TestPostgresWorkflow(t *testing.T) {
 	if resp.StatusCode != 403 {
 		t.Fatal("a cookie alone must not authorize a mutation")
 	}
-	if len(admin.client.Jar.Cookies(u)) != 2 {
+	cookies := map[string]bool{}
+	for _, cookie := range admin.client.Jar.Cookies(u) {
+		cookies[cookie.Name] = true
+	}
+	if !cookies["wsl_session"] || !cookies["wsl_csrf"] {
 		t.Fatal("session and CSRF cookies missing")
 	}
 	createUser := func(name string) (testClient, string) {
 		b := expect(t, admin, "POST", "/users", map[string]string{
 			"username": name, "password": "isolated-test-password-123", "tenant_name": name + "-tenant",
 		}, 201)
+		explicitTestCeiling(t, admin, field(t, b, "tenant_id"))
 		return client(name), field(t, b, "tenant_id")
 	}
 	alice, tenantA := createUser("alice")
@@ -209,7 +237,8 @@ func TestPostgresWorkflow(t *testing.T) {
 	account := field(t, expect(t, admin, "POST", "/accounts", map[string]string{"name": "shared-test"}, 201), "id")
 	expect(t, admin, "PATCH", "/accounts/"+account, map[string]any{"version": 1, "connection_enabled": true}, 409)
 	// Only isolated SQL fixtures can simulate a trusted native observation.
-	if _, err := db.Platform.Exec(ctx, `UPDATE accounts SET connection_enabled=true,testing_enabled=true WHERE id=$1`, account); err != nil {
+	if _, err := db.Platform.Exec(ctx, `UPDATE accounts SET connection_enabled=true,testing_enabled=true,
+        auth_state='authenticated',credential_sealed=$2 WHERE id=$1`, account, []byte("synthetic-test-session")); err != nil {
 		t.Fatal(err)
 	}
 	newClaim := func(c testClient, label string) (string, string, string) {
@@ -318,6 +347,7 @@ func TestPostgresWorkflow(t *testing.T) {
 		}, 409)
 	})
 	t.Run("version fences and test cancellation", func(t *testing.T) {
+		seedSyntheticGroupOwnership(t, db, vault, groupA)
 		update := map[string]any{"version": 1, "config": map[string]any{"blocked_words": []string{"fixture"}}, "management_enabled": false}
 		expect(t, alice, "PATCH", "/groups/"+groupA, update, 200)
 		expect(t, alice, "PATCH", "/groups/"+groupA, update, 409)
@@ -329,6 +359,23 @@ func TestPostgresWorkflow(t *testing.T) {
 		testInput["seconds"] = 300
 		window := field(t, expect(t, admin, "POST", "/test-windows", testInput, 201), "id")
 		expect(t, alice, "GET", "/test-windows", nil, 403)
+		expect(t, alice, "GET", "/test-tools", nil, 403)
+		expect(t, alice, "POST", "/test-tools/call", map[string]any{}, 403)
+		catalog := expect(t, admin, "GET", "/test-tools", nil, 200)
+		chiliAdmin := admin
+		chiliAdmin.workspace = "lajiaoliao"
+		chiliCatalog := expect(t, chiliAdmin, "GET", "/test-tools", nil, 200)
+		if !bytes.Contains(chiliCatalog, []byte(`"group_accept"`)) ||
+			!bytes.Contains(chiliCatalog, []byte(`"member_nickname"`)) {
+			t.Fatal("controlled catalog did not isolate platform actions")
+		}
+		// Chili supports its own text path but cannot borrow a WSL group grant.
+		expect(t, chiliAdmin, "POST", "/test-windows", testInput, 409)
+		if bytes.Contains(catalog, []byte(`"name":"create_grant"`)) || !bytes.Contains(catalog, []byte(`"run_moderation"`)) {
+			t.Fatal("unexpected controlled tool catalog")
+		}
+		expect(t, admin, "POST", "/test-tools/call", map[string]any{"name": "shell",
+			"arguments": map[string]any{"account_id": account}}, 400)
 		expect(t, admin, "POST", "/test-windows/"+window+"/cancel", map[string]any{}, 200)
 	})
 	t.Run("immutable exact financial entries", func(t *testing.T) {
@@ -406,7 +453,7 @@ func TestPostgresWorkflow(t *testing.T) {
 		}
 		var native string
 		if err := db.Platform.QueryRow(ctx, `SELECT g.native_id FROM inbox i JOIN native_groups g ON g.id=i.group_id
-            WHERE i.native_message_id=$1 AND i.state='unresolved' AND i.binding_version IS NULL`,
+            WHERE i.native_message_id=$1 AND i.state='shadow' AND i.binding_version IS NULL`,
 			unknown.NativeID).Scan(&native); err != nil || native != unknown.NativeGroupID {
 			t.Fatal("unknown native group did not persist without a roster lookup")
 		}

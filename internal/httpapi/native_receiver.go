@@ -3,11 +3,14 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"regexp"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"wangshangliao/internal/gateway"
 )
@@ -15,8 +18,38 @@ import (
 // Tests construct Server without starting native network connections.
 func (s *Server) RunReceiver(ctx context.Context) <-chan struct{} {
 	s.Receiver = gateway.NewReceiverManager(s.DB.Platform, s.Vault, s.nativeRequestIDs)
+	s.Receiver.MobileIDs = s.nativeMobileRequestIDs
+	s.Receiver.Changes = s.Changes
+	s.nativeMediaTestPort = nativeMediaPort{receiver: s.Receiver}
+	s.nativeTextTestPort = nativeTextPort{receiver: s.Receiver}
+	s.chiliMediaTestPort = nativeMediaPort{receiver: s.Receiver}
+	// Decoder reads cannot occupy the receiver/control pool. Four extra
+	// connections are bounded independently of the number of native accounts.
+	config := s.DB.Platform.Config()
+	config.MaxConns = gateway.DecoderWorkers
+	decoderDB, err := pgxpool.NewWithConfig(ctx, config)
+	if err == nil {
+		s.Decoder = gateway.NewDecoderManager(decoderDB, s.Vault)
+		s.Decoder.Changes = s.Changes
+		s.Receiver.WakeDecoder = s.Decoder.Notify
+	} else {
+		slog.Error("decoder pool unavailable", "code", "decoder_database_unavailable")
+	}
 	done := make(chan struct{})
-	go func() { defer close(done); s.Receiver.Run(ctx) }()
+	go func() {
+		defer close(done)
+		var workers sync.WaitGroup
+		runners := []func(context.Context){s.Receiver.Run}
+		if s.Decoder != nil {
+			runners = append(runners, s.Decoder.Run)
+			defer decoderDB.Close()
+		}
+		for _, run := range runners {
+			workers.Add(1)
+			go func() { defer workers.Done(); run(ctx) }()
+		}
+		workers.Wait()
+	}()
 	return done
 }
 
@@ -33,7 +66,7 @@ func (s *Server) readReceiver(r *http.Request, account string) (receiverView, er
 	var raw []byte
 	var leased bool
 	err := s.DB.Platform.QueryRow(r.Context(), `SELECT enabled,revision,observed_at,snapshot,
-        coalesce(lease_until>now() AND observed_at>now()-interval '5 seconds',false)
+        coalesce(lease_until>now() AND observed_at>now()-interval '15 seconds',false)
         FROM account_receivers WHERE account_id=$1`, account).Scan(
 		&out.Enabled, &out.Revision, &out.ObservedAt, &raw, &leased)
 	if err == pgx.ErrNoRows {
@@ -79,8 +112,9 @@ func (s *Server) setReceiver(w http.ResponseWriter, r *http.Request, p Principal
 		return err
 	}
 	var authenticated bool
+	var nativePlatform string
 	if err = tx.QueryRow(r.Context(), `SELECT auth_state='authenticated' AND credential_sealed IS NOT NULL
-        FROM accounts WHERE id=$1 FOR UPDATE`, r.PathValue("id")).Scan(&authenticated); err != nil {
+        ,platform FROM accounts WHERE id=$1 FOR UPDATE`, r.PathValue("id")).Scan(&authenticated, &nativePlatform); err != nil {
 		return err
 	}
 	if in.Enabled && !authenticated {
@@ -90,6 +124,8 @@ func (s *Server) setReceiver(w http.ResponseWriter, r *http.Request, p Principal
 		if s.Receiver == nil {
 			return fail(503, "receiver_unavailable")
 		}
+	}
+	if in.Enabled && nativePlatform == "wsl" {
 		var configured bool
 		if err = tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM native_im_profile)`).Scan(&configured); err != nil {
 			return err

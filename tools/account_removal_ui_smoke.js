@@ -1,9 +1,10 @@
 // All deletion APIs are synthetic. Never remove an existing local/native account.
 // prettier-ignore
-async (page) => {
+async (page, fixtureMe) => {
   const base = 'http://127.0.0.1:5173'
   if (new URL(page.url()).origin !== base) throw new Error('Local console only')
-  const realMe = (await (await page.request.get(base + '/api/v1/me')).json()).data
+  const realMe = fixtureMe || { user: { id: '40000000-0000-4000-8000-000000000099', role: 'superadmin' },
+    permissions: ['overview:read', 'accounts:read', 'groups:read', 'workspaces:maibot'] }
   const original = await page.evaluate(() => Object.fromEntries(Object.entries(sessionStorage).filter(([key]) => key.startsWith('wsl:'))))
   const id = (n) => `40000000-0000-4000-8000-${String(n).padStart(12, '0')}`
   const group = id(9), owner = realMe.user.id
@@ -26,7 +27,12 @@ async (page) => {
     let data = []
     if (method === 'GET') {
       if (path === '/me') data = tenant ? { user: { ...realMe.user, role: 'user', tenant_id: id(8) }, permissions: ['overview:read', 'accounts:read', 'groups:read'] } : realMe
+      else if (path === '/workspaces') data = { items: [{ id: 'wsl', name: '旺商聊机器人' },
+        ...(!tenant ? [{ id: 'maibot', name: '热群机器人' }] : [])] }
       else if (path === '/accounts') data = accounts.filter((a) => a.workspace === workspace)
+      else if (path === '/user-center') data = { permissions: ['groups:read'], subscription: null, groups: [], claims: [], operations: [] }
+      else if (path === '/user-center/groups') data = { items: [], total: 0, page: 1, page_size: 20 }
+      else if (path === '/user-center/usage') data = { usage: [], total: 0 }
       else if (path === '/overview') data = { accounts: accounts.filter((a) => a.workspace === workspace).length, limits: { accounts: 10, groups: 100, ai_groups: 100 } }
       else if (preview) {
         const account = accounts.find((a) => a.id === preview[1] && a.workspace === workspace)
@@ -139,7 +145,9 @@ async (page) => {
     await dialog.waitFor({ state: 'hidden' })
     blocked = false
     await page.getByRole('button', { name: '切换工作台', exact: true }).click()
-    await page.locator('.brand-name').filter({ hasText: '热群机器人' }).waitFor()
+    await page.getByRole('dialog', { name: '选择平台', exact: true })
+      .getByRole('button', { name: '热群机器人', exact: true }).click()
+    await page.getByRole('heading', { name: '聊天机器人状态', exact: true }).waitFor()
     await open('独立热群机器人')
     await dialog.getByLabel('输入机器人名称确认删除', { exact: true }).fill('独立热群机器人')
     await confirm.click()
@@ -148,7 +156,7 @@ async (page) => {
     tenant = true
     await page.evaluate((owner) => sessionStorage.setItem(`wsl:workspace:${owner}`, 'wsl'), owner)
     await page.reload()
-    await page.getByRole('button', { name: '保留机器人', exact: true }).waitFor()
+    await page.locator('.user-center').waitFor()
     if (await page.getByRole('button', { name: /^删除机器人 / }).count()) throw new Error('Tenant can delete a shared robot')
     return { passed: true, realDeletes: 0, syntheticDeletes: 2, versionConflicts: 1, cancelWrites: 0, scopedCleanup: true, latePreviewIgnored: true, blockers: true, tenantDenied: true, viewports: [320, 390, 647, 1440] }
   } finally {

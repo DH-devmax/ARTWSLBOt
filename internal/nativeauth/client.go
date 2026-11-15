@@ -42,28 +42,46 @@ type Session struct {
 	JWT             string `json:"jwt"`
 	MAC             []byte `json:"mac"`
 	ProtocolVersion string `json:"protocol_version"`
+	DesktopPlatform string `json:"desktop_platform,omitempty"`
 	NIMID           string `json:"nim_id"`
 	NIMToken        string `json:"nim_token"`
 	NIMAuthType     int    `json:"nim_auth_type"`
 	AccountID       string `json:"account_id,omitempty"`
 }
 
-type RequestIDSource func(context.Context, bool, uint64) (uint64, error)
+type RequestIDSource func(context.Context, uint64) (uint64, error)
+
+// RequestCountSource allocates one Android per-user metadata count before
+// transport. The source owns advancement, including reservations not submitted.
+type RequestCountSource func(context.Context) (uint64, error)
+
+type requestObserverKey struct{}
+
+// WithRequestObserver exposes only a request count, not a route or payload.
+// It is optional and must not perform I/O; authentication is otherwise unchanged.
+func WithRequestObserver(ctx context.Context, observe func()) context.Context {
+	return context.WithValue(ctx, requestObserverKey{}, observe)
+}
 
 type Client struct {
-	mu         sync.Mutex
-	config     Deployment
-	http       *http.Client
-	fields     []uint64
-	public     []byte
-	private    []byte
-	bodyKey    []byte
-	jwt        string
-	mac        []byte
-	cooldown   time.Time
-	safe       bool
-	identity   map[string]json.RawMessage
-	requestIDs RequestIDSource
+	mu             sync.Mutex
+	config         Deployment
+	http           *http.Client
+	fields         []uint64
+	public         []byte
+	private        []byte
+	bodyKey        []byte
+	jwt            string
+	mac            []byte
+	cooldown       time.Time
+	safe           bool
+	identity       map[string]json.RawMessage
+	requestIDs     RequestIDSource
+	requestCounts  RequestCountSource
+	mobile         bool
+	closed         bool
+	loginUnknown   bool
+	onboardingPeer *OnboardingOutboundTarget
 }
 
 type AuthClient interface {
@@ -75,7 +93,7 @@ type AuthClient interface {
 	Close()
 }
 
-var currentIDs, legacyIDs atomic.Uint64
+var desktopIDs atomic.Uint64
 
 // All accounts share the deployment's body key. Request nonces must not collide
 // between clients using the same millisecond timestamp.
@@ -96,8 +114,19 @@ func nextRequestID(counter *atomic.Uint64, now uint64) (uint64, error) {
 }
 
 func NewClient(d Deployment) (AuthClient, error) {
-	if !supportedProtocol(d.ProtocolVersion) {
-		return nil, rejection("native_protocol_unsupported")
+	return newClient(d, false)
+}
+
+// NewMobileClient creates an independent business-auth companion, never an IM client.
+func NewMobileClient(d Deployment) (AuthClient, error) {
+	return newClient(d, true)
+}
+
+func newClient(d Deployment, mobile bool) (AuthClient, error) {
+	var err error
+	d, err = validateDeployment(d, mobile)
+	if err != nil {
+		return nil, err
 	}
 	if !nativewire.Available() {
 		return nil, rejection("native_crypto_unavailable")
@@ -113,16 +142,16 @@ func NewClient(d Deployment) (AuthClient, error) {
 	}
 	body, err := decodeKey(d.BodyKey)
 	if err != nil {
+		clear(private)
 		return nil, err
 	}
 	c := &Client{config: d, http: newHTTP(), fields: append([]uint64(nil), d.Metadata...),
-		public: public, private: private, bodyKey: body}
+		public: public, private: private, bodyKey: body, mobile: mobile}
 	c.fields[3], c.fields[4], c.fields[8] = 0, 0, 0
 	c.fields[0] = c.deviceIdentity(public)
-	if c.android() {
-		c.fields[1], c.fields[2] = 3, 1
-	} else if d.ProtocolVersion == "2.8.3" {
-		c.fields[1], c.fields[2] = 1, 1
+	c.fields[1], c.fields[2] = 1, 1
+	if mobile {
+		c.fields[1] = 3
 	}
 	return c, nil
 }
@@ -130,13 +159,18 @@ func NewClient(d Deployment) (AuthClient, error) {
 func (c *Client) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
+	c.closed = true
 	clear(c.private)
 	clear(c.bodyKey)
 	clear(c.mac)
 	for _, value := range c.identity {
 		clear(value)
 	}
-	c.jwt, c.identity = "", nil
+	c.jwt, c.identity, c.safe = "", nil, false
+	c.requestCounts = nil
 	c.config = Deployment{}
 	c.http.CloseIdleConnections()
 }
@@ -166,10 +200,33 @@ func validToken(token string) bool {
 }
 
 func (c *Client) request(ctx context.Context, route string, params map[string]any, exchange []byte) (map[string]json.RawMessage, error) {
+	if c.closed {
+		return nil, rejection("native_auth_closed")
+	}
+	if c.mobile {
+		var err error
+		params, err = c.mobileRequestParams(route, params, exchange)
+		if err != nil {
+			return nil, err
+		}
+		if c.requestIDs == nil {
+			return nil, rejection("native_request_id_unavailable")
+		}
+	}
 	anonymous := route == "/v1/user/login" || route == "/v1/user/register" ||
-		route == "/v1/user/get-change-device-verify" || route == "/v1/verify/sms-anon"
-	if !anonymous && route != "/v1/user/RefreshToken" && route != "/v1/user/get-nim-token" && route != "/v1/user/verify_safe_code" {
+		route == "/v1/user/get-change-device-verify" || route == "/v1/verify/sms-anon" ||
+		route == "/v1/settings/get-sys-cfg"
+	if !anonymous && route != "/v1/user/RefreshToken" && route != "/v1/user/get-nim-token" &&
+		route != "/v1/user/verify_safe_code" && route != "/v1/group/get-group-list" &&
+		route != "/v1/group/get-group-members" && !nativeSettingsRoute(route) && !nativeSettingMutationRoute(route) &&
+		!onboardingOutboundRoute(route) {
 		return nil, rejection("native_unsupported_route")
+	}
+	fence, fenced := ctx.Value(settingFenceKey{}).(nativewire.SubmissionFence)
+	settingMutation := nativeSettingMutationRoute(route) || route == onboardingOutboundApplyRoute ||
+		route == "/v1/verify/sms-anon" && fenced
+	if settingMutation && (!fenced || fence == nil) {
+		return nil, rejection("native_setting_fence_required")
 	}
 	if !anonymous && c.jwt == "" {
 		return nil, rejection("native_reauth_required")
@@ -181,18 +238,12 @@ func (c *Client) request(ctx context.Context, route string, params map[string]an
 		return nil, rejection("native_cancelled")
 	}
 	now := time.Now()
-	current := c.android()
 	id, version := uint64(now.UnixNano()), c.wireVersion()
-	counter := &legacyIDs
-	if current {
-		id = uint64(now.UnixMilli())
-		counter = &currentIDs
-	}
 	var err error
 	if c.requestIDs != nil {
-		id, err = c.requestIDs(ctx, current, id)
+		id, err = c.requestIDs(ctx, id)
 	} else {
-		id, err = nextRequestID(counter, id)
+		id, err = nextRequestID(&desktopIDs, id)
 	}
 	if err != nil {
 		return nil, err
@@ -201,22 +252,21 @@ func (c *Client) request(ctx context.Context, route string, params map[string]an
 		return nil, rejection("native_request_id_exhausted")
 	}
 	plain, err := json.Marshal(params)
-	if err != nil {
+	if err != nil || c.mobile && len(plain) > 32768 {
+		clear(plain)
 		return nil, rejection("native_invalid_input")
 	}
+	defer clear(plain)
 	digest := c.bodyDigest(plain)
 	body, err := nativewire.SealBusinessDigest(c.bodyKey, id, plain, digest, c.fields[0], version)
 	if err != nil {
 		return nil, rejection("native_encoding_failed")
 	}
 	fields := append([]uint64(nil), c.fields...)
-	if current {
-		fields[1], fields[2], fields[10], fields[11], fields[13] = 3, 1, 0, 0, 0
-	}
 	aad := nativewire.BindingDigest(id, digest, fields[0], version)
 	fields[5], fields[6], fields[7], fields[9], fields[12] = id, uint64(len(plain)), digest, uint64(now.Unix()), 1
 	fields[8] = 0
-	if len(c.mac) == 16 && (!current || fields[3] > 0) {
+	if len(c.mac) == 16 {
 		input := make([]byte, 24)
 		binary.LittleEndian.PutUint64(input, fields[0])
 		binary.LittleEndian.PutUint64(input[8:], id)
@@ -225,6 +275,19 @@ func (c *Client) request(ctx context.Context, route string, params map[string]an
 		if err != nil {
 			return nil, rejection("native_encoding_failed")
 		}
+	}
+	if c.mobile && c.jwt != "" && c.requestCounts != nil {
+		count, err := c.requestCounts(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if count >= 1<<32 {
+			return nil, rejection("native_request_count_exhausted")
+		}
+		if ctx.Err() != nil {
+			return nil, rejection("native_cancelled")
+		}
+		fields[4] = count
 	}
 	metadata, err := nativewire.Metadata(fields)
 	if err != nil {
@@ -238,22 +301,17 @@ func (c *Client) request(ctx context.Context, route string, params map[string]an
 	if err != nil {
 		return nil, rejection("native_invalid_input")
 	}
-	for _, name := range []string{"x-version", "x-device", "accept", "content-type"} {
+	for _, name := range []string{"accept", "content-type"} {
 		if value := c.config.Headers[name]; value != "" {
 			req.Header.Set(name, value)
 		}
 	}
-	if current {
-		req.Header.Set("x-version", "1."+strconv.FormatUint(version, 10)+".0")
+	req.Header.Set("x-version", "1."+strconv.FormatUint(version, 10)+".0")
+	req.Header.Set("x-device", "1")
+	req.Header.Set("x-client", desktopClient(c.config.DesktopPlatform))
+	if c.mobile {
 		req.Header.Set("x-device", "3")
 		req.Header.Set("x-client", "2")
-		if c.config.ProtocolVersion == "3.7.4" {
-			req.Header.Set("content-type", "application/json; charset=utf-8")
-		}
-	} else if c.config.ProtocolVersion == "2.8.3" {
-		req.Header.Set("x-version", "1.1770619133615.0")
-		req.Header.Set("x-device", "1")
-		req.Header.Set("x-client", "11")
 	}
 	b64 := base64.RawURLEncoding.EncodeToString
 	req.Header.Set("x-request", b64(metadata))
@@ -265,22 +323,38 @@ func (c *Client) request(ctx context.Context, route string, params map[string]an
 		req.Header.Set("x-token", strconv.FormatUint(fields[3], 10))
 		req.Header.Set("x-jwt", c.jwt)
 	}
-	// The current SDK supplies a sealed device context to registration too.
-	// It authenticates the device, not the newly created user.
-	if route == "/v1/user/register" && c.config.ProtocolVersion == "3.7.4" {
-		exchange, err = c.exchangeContext(3, uint64(now.UnixNano()))
-		if err != nil {
-			return nil, err
-		}
-	}
 	if len(exchange) > 0 {
 		req.Header.Set("x-context", b64(exchange))
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, rejection("native_cancelled")
 	}
-	response, err := c.http.Do(req)
+	if observe, ok := ctx.Value(requestObserverKey{}).(func()); ok {
+		observe()
+	}
+	var response *http.Response
+	var settingBody []byte
+	attempted := false
+	submit := func(work context.Context) error {
+		attempted = true
+		response, err = c.http.Do(req.WithContext(work))
+		if err == nil && settingMutation {
+			settingBody, err = io.ReadAll(io.LimitReader(response.Body, nativewire.Limit+4097))
+		}
+		return err
+	}
+	if settingMutation {
+		err = fence(ctx, submit)
+	} else {
+		err = submit(ctx)
+	}
 	if err != nil {
+		if response != nil {
+			response.Body.Close()
+		}
+		if !attempted {
+			return nil, err
+		}
 		var native *Error
 		if errors.As(err, &native) {
 			// These errors originate only in the pre-connect address gate.
@@ -299,6 +373,10 @@ func (c *Client) request(ctx context.Context, route string, params map[string]an
 		return nil, &Error{Code: "native_transport_unknown", Submitted: true, Diagnostic: diagnostic}
 	}
 	defer response.Body.Close()
+	if c.mobile && c.jwt != "" && c.requestCounts == nil {
+		// The Android SDK advances its existing per-user count after a response.
+		c.fields[4] = uint64(uint32(c.fields[4] + 1))
+	}
 	if response.StatusCode == 401 {
 		c.jwt, c.mac = "", nil
 		return nil, &Error{Code: "native_reauth_required", Number: 401, Submitted: true}
@@ -319,37 +397,65 @@ func (c *Client) request(ctx context.Context, route string, params map[string]an
 	if response.StatusCode != 200 {
 		return nil, &Error{Code: "native_http_rejected", Number: response.StatusCode, Submitted: true}
 	}
-	encoded, err := io.ReadAll(io.LimitReader(response.Body, nativewire.Limit+4097))
-	if err != nil || len(encoded) > nativewire.Limit+4096 {
+	responseLimit := nativewire.Limit
+	// This fixed account-wide history route returns a bounded server window
+	// whose authenticated JSON can exceed the ordinary business response cap.
+	if route == "/v1/group/get-apply-logs" {
+		responseLimit = 3 * nativewire.Limit
+	}
+	encoded := settingBody
+	if !settingMutation {
+		encoded, err = io.ReadAll(io.LimitReader(response.Body, int64(responseLimit)+4097))
+	}
+	if err != nil || len(encoded) > responseLimit+4096 {
 		return nil, &Error{Code: "native_response_invalid", Submitted: true}
 	}
 	decoded := encoded
 	if !bytes.HasPrefix(encoded, []byte(`{"`)) {
-		decoded, err = nativewire.OpenBusiness(c.bodyKey, aad, encoded, nativewire.Limit)
+		decoded, err = nativewire.OpenBusiness(c.bodyKey, aad, encoded, responseLimit)
 	}
-	if err != nil || len(decoded) > nativewire.Limit {
+	if err != nil || len(decoded) > responseLimit {
 		return nil, &Error{Code: "native_response_invalid", Submitted: true}
 	}
 	var envelope struct {
-		Code *int                       `json:"code"`
-		Msg  string                     `json:"msg"`
-		Data map[string]json.RawMessage `json:"data"`
+		Code *int            `json:"code"`
+		Msg  json.RawMessage `json:"msg"`
+		Data json.RawMessage `json:"data"`
 	}
 	if json.Unmarshal(decoded, &envelope) != nil || envelope.Code == nil {
 		return nil, &Error{Code: "native_response_invalid", Submitted: true}
 	}
 	if *envelope.Code != 0 {
-		number, code := *envelope.Code, "native_business_rejected"
+		number := *envelope.Code
+		code, diagnostic := authBusinessResponseRejection(route, params, number, envelope.Msg)
+		if onboardingLookupRoute(route) {
+			// Error payloads still require the fixed business envelope. Only a
+			// bounded reason classification survives this request.
+			var data map[string]json.RawMessage
+			if len(envelope.Data) > 0 && json.Unmarshal(envelope.Data, &data) != nil {
+				return nil, &Error{Code: "native_response_invalid", Submitted: true}
+			}
+			code, diagnostic = onboardingLookupRejection(number, envelope.Msg)
+		}
+		if diagnostic == "" {
+			// Non-authentication routes retain their original strict envelope.
+			var message string
+			var data map[string]json.RawMessage
+			if len(envelope.Msg) > 0 && json.Unmarshal(envelope.Msg, &message) != nil ||
+				len(envelope.Data) > 0 && json.Unmarshal(envelope.Data, &data) != nil {
+				return nil, &Error{Code: "native_response_invalid", Submitted: true}
+			}
+		}
 		switch number {
 		case 401:
 			code, c.jwt, c.mac = "native_reauth_required", "", nil
 		case 429:
 			code = "native_rate_limited"
 			c.cooldown = time.Now().Add(30 * time.Second)
-		case 1001:
-			code = "native_login_rejected_unspecified"
 		case 1039:
-			code = "native_phone_not_found"
+			if diagnostic == "" {
+				code = "native_phone_not_found"
+			}
 		case 1069:
 			code = "native_device_verification_required"
 		case 1400:
@@ -364,22 +470,33 @@ func (c *Client) request(ctx context.Context, route string, params map[string]an
 			code = "native_security_locked"
 		case 1405:
 			code = "native_security_phone_required"
-		default:
-			switch envelope.Msg {
-			case "账号或密码错误", "密码错误":
-				code = "native_invalid_credentials"
-			case "验证码错误", "短信验证码错误":
-				code = "native_invalid_sms"
-			case "验证码已过期":
-				code = "native_sms_expired"
+		}
+		if onboardingLookupRoute(route) && code == "native_reauth_required" {
+			c.jwt, c.mac = "", nil
+		}
+		if code == "native_rate_limited" || code == "native_sms_rate_limited" {
+			// This is a local guard, not a claim about the provider's window.
+			delay := 30 * time.Second
+			if code == "native_sms_rate_limited" {
+				delay = time.Minute
+			}
+			if until := time.Now().Add(delay); c.cooldown.Before(until) {
+				c.cooldown = until
 			}
 		}
-		return nil, &Error{Code: code, Number: number, RetryAfter: max(0, time.Until(c.cooldown)), Submitted: true}
+		return nil, &Error{Code: code, Number: number, Diagnostic: diagnostic,
+			RetryAfter: max(0, time.Until(c.cooldown)), Submitted: true}
+	}
+	var data map[string]json.RawMessage
+	var message string
+	if len(envelope.Msg) > 0 && json.Unmarshal(envelope.Msg, &message) != nil ||
+		len(envelope.Data) > 0 && json.Unmarshal(envelope.Data, &data) != nil {
+		return nil, &Error{Code: "native_response_invalid", Submitted: true}
 	}
 	if route == "/v1/user/verify_safe_code" {
 		token := response.Header.Get("x-set-jwt")
 		if token == "" {
-			_ = json.Unmarshal(envelope.Data["jwtToken"], &token)
+			_ = json.Unmarshal(data["jwtToken"], &token)
 		}
 		if !c.safe || c.jwt == "" || (token != "" && !validToken(token)) {
 			return nil, rejection("native_security_rotation_invalid")
@@ -389,25 +506,34 @@ func (c *Client) request(ctx context.Context, route string, params map[string]an
 		}
 		c.safe = false
 	}
-	if current && c.jwt != "" {
-		c.fields[4] = (c.fields[4] + 1) & 0x7fffffff
-	}
-	return envelope.Data, nil
+	return data, nil
 }
 
 func (c *Client) Login(ctx context.Context, params map[string]any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return rejection("native_auth_closed")
+	}
+	if c.mobile && (c.loginUnknown || c.jwt != "") {
+		return rejection("native_auth_state_conflict")
+	}
+	kind := uint64(1)
+	if c.mobile {
+		var err error
+		params, err = mobileLoginParams(params)
+		if err != nil {
+			return err
+		}
+		kind = 3
+	}
+	clear(c.mac)
+	clearOnboardingOutboundData(c.identity)
 	c.jwt, c.mac, c.safe, c.identity = "", nil, false, nil
 	c.fields[3], c.fields[4] = 0, 0
-	current := c.android()
-	kind := uint64(1)
-	if current {
-		kind, c.mac = 3, append([]byte(nil), c.public[16:32]...)
-		params["version"], params["appVersion"] = "3.7.3", 335
-		params["appHash"] = "3C:F2:35:2F:6D:B2:85:67:98:25:B1:2F:06:5E:FC:5C:7A:AC:0F:6D:74:67:DA:4E:F9:50:05:58:C4:42:F1:96=02ED673B263F7EA80B307ADE1967C49A7264F955CDF33EB36F7673591029E195"
-		if c.config.ProtocolVersion == "3.7.4" {
-			params["version"], params["appVersion"], params["appHash"] = "3.7.4", 337, android374AppHash
+	for _, name := range []string{"version", "appVersion", "appHash"} {
+		if _, exists := params[name]; exists && !c.mobile {
+			return rejection("native_desktop_required")
 		}
 	}
 	now := uint64(time.Now().UnixNano())
@@ -417,38 +543,63 @@ func (c *Client) Login(ctx context.Context, params map[string]any) error {
 	}
 	result, err := c.request(ctx, "/v1/user/login", params, sealed)
 	if err != nil {
+		var native *Error
+		if c.mobile && errors.As(err, &native) && native.Submitted &&
+			(native.Code == "native_transport_unknown" || native.Code == "native_response_invalid") {
+			c.loginUnknown = true
+		}
 		return err
 	}
+	accepted := false
+	defer func() {
+		if !accepted {
+			clearOnboardingOutboundData(result)
+			if c.mobile {
+				c.loginUnknown = true
+			}
+		}
+	}()
 	var uid uint64
 	var jwt string
 	if json.Unmarshal(result["uid"], &uid) != nil || uid == 0 || uid >= 1<<31 ||
 		json.Unmarshal(result["jwtToken"], &jwt) != nil || !validToken(jwt) {
+		if c.mobile {
+			return mobileLoginFailure("login_identity_invalid")
+		}
 		return rejection("native_login_binding")
 	}
-	mac, tokenKind := c.mac, uint64(0)
-	if !current {
-		var token string
-		if json.Unmarshal(result["token"], &token) != nil {
-			return rejection("native_login_binding")
+	if c.mobile {
+		err = c.acceptMobileLogin(result, params, uid, jwt)
+		accepted = err == nil
+		return err
+	}
+	var token string
+	if json.Unmarshal(result["token"], &token) != nil {
+		return rejection("native_login_binding")
+	}
+	encoded, err := nativewire.Base64URL(token)
+	if err != nil || len(encoded) > 65584 {
+		return rejection("native_login_binding")
+	}
+	private, err := nativewire.CurvePrivate(c.private)
+	if err != nil {
+		return rejection("native_login_binding")
+	}
+	opened, err := nativewire.OpenSealedBox(private, encoded)
+	clear(private)
+	if err != nil {
+		return rejection("native_login_binding")
+	}
+	defer clear(opened)
+	seconds, correlation, tokenKind, tokenUID, mac, err := readLoginToken(opened)
+	defer func() {
+		if !accepted {
+			clear(mac)
 		}
-		encoded, err := nativewire.Base64URL(token)
-		if err != nil || len(encoded) > 65584 {
-			return rejection("native_login_binding")
-		}
-		private, err := nativewire.CurvePrivate(c.private)
-		if err != nil {
-			return rejection("native_login_binding")
-		}
-		opened, err := nativewire.OpenSealedBox(private, encoded)
-		clear(private)
-		if err != nil {
-			return rejection("native_login_binding")
-		}
-		var seconds, correlation, tokenUID uint64
-		seconds, correlation, tokenKind, tokenUID, mac, err = readLoginToken(opened)
-		if err != nil || seconds != now/1e9 || correlation != now || tokenUID != uid {
-			return rejection("native_login_binding")
-		}
+	}()
+	if err != nil || seconds != now/1e9 || correlation != now || tokenUID != uid {
+		clear(mac)
+		return rejection("native_login_binding")
 	}
 	var required, set bool
 	for name, dest := range map[string]*bool{"safeCodeRequired": &required, "safeCodeSet": &set} {
@@ -457,6 +608,7 @@ func (c *Client) Login(ctx context.Context, params map[string]any) error {
 		}
 	}
 	c.fields[3], c.fields[4], c.jwt, c.mac, c.safe, c.identity = uid, tokenKind, jwt, mac, required, result
+	accepted = true
 	return nil
 }
 
@@ -529,6 +681,9 @@ func readLoginToken(data []byte) (seconds, correlation, kind, uid uint64, mac []
 func (c *Client) VerifySecurity(ctx context.Context, code string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return rejection("native_auth_closed")
+	}
 	if !c.safe || !sixDigits(code) {
 		return rejection("native_security_input")
 	}
@@ -539,6 +694,12 @@ func (c *Client) VerifySecurity(ctx context.Context, code string) error {
 func (c *Client) Finish(ctx context.Context) (Session, string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return Session{}, "", rejection("native_auth_closed")
+	}
+	if c.mobile {
+		return c.finishMobile(ctx)
+	}
 	var session Session
 	if c.safe {
 		return session, "", rejection("native_security_required")
@@ -560,25 +721,14 @@ func (c *Client) Finish(ctx context.Context) (Session, string, error) {
 	if nimID == "" || len(nimID) > 128 || strings.IndexFunc(nimID, unicode.IsSpace) >= 0 {
 		return session, "", rejection("native_login_identity")
 	}
-	authType := 0
-	if c.android() || c.config.ProtocolVersion == "2.8.3" {
-		result, err := c.request(ctx, "/v1/user/get-nim-token", map[string]any{
-			"nimDeviceId": c.config.DeviceID, "uid": c.fields[3], "loginToken": c.jwt}, nil)
-		if err != nil {
-			return session, "", err
-		}
-		_ = json.Unmarshal(result["nimToken"], &token)
-		kind := "NIM_LOGIN_KIND_STATIC"
-		if raw, ok := result["kind"]; ok && json.Unmarshal(raw, &kind) != nil {
-			return session, "", rejection("native_nim_token_invalid")
-		}
-		types := map[string]int{"NIM_LOGIN_KIND_STATIC": 0, "NIM_LOGIN_KIND_DYNAMIC": 1, "NIM_LOGIN_KIND_CALLBACK": 2}
-		var ok bool
-		if authType, ok = types[kind]; !ok {
-			return session, "", rejection("native_nim_token_invalid")
-		}
-	} else {
-		_ = json.Unmarshal(c.identity["nimToken"], &token)
+	result, err := c.request(ctx, "/v1/user/get-nim-token", map[string]any{
+		"nimDeviceId": c.config.DeviceID, "uid": c.fields[3], "loginToken": c.jwt}, nil)
+	if err != nil {
+		return session, "", err
+	}
+	token, authType, err := decodeIMToken(result)
+	if err != nil {
+		return session, "", err
 	}
 	if !validToken(token) {
 		return session, "", rejection("native_nim_token_invalid")
@@ -599,7 +749,7 @@ func (c *Client) Finish(ctx context.Context) (Session, string, error) {
 	}
 	session = Session{Origin: c.config.Origin, UID: c.fields[3], Kind: c.fields[4], Device: c.fields[0],
 		JWT: c.jwt, MAC: append([]byte(nil), c.mac...), ProtocolVersion: c.config.ProtocolVersion,
-		NIMID: nimID, NIMToken: token, NIMAuthType: authType}
+		DesktopPlatform: c.config.DesktopPlatform, NIMID: nimID, NIMToken: token, NIMAuthType: authType}
 	if raw, ok := c.identity["accountId"]; ok {
 		var account uint64
 		if json.Unmarshal(raw, &account) != nil || account == 0 || account >= 1<<31 {

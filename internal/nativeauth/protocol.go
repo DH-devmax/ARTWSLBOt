@@ -8,36 +8,42 @@ import (
 	"wangshangliao/internal/nativewire"
 )
 
-// Client identity is derived from the pinned, signed official APK, not from
-// its version string alone. See docs/official-client-research.md.
+const DesktopProtocolVersion = "2.8.3"
+const MobileProtocolVersion = "3.7.4"
+
+// Identity of the fixed, signed Android 3.7.4 APK, not a caller-selected hash.
 const android374AppHash = "3C:F2:35:2F:6D:B2:85:67:98:25:B1:2F:06:5E:FC:5C:7A:AC:0F:6D:74:67:DA:4E:F9:50:05:58:C4:42:F1:96=5D499D6530B3C4DC2787F668CF85F7A676CB45B85E71F3FD8105006D1B732A45"
 
+// MobileAppHash is the pinned APK identity required by mobile deployment imports.
+const MobileAppHash = android374AppHash
+
+const mobileExchangeVersion uint64 = 1703240058617
+
 func supportedProtocol(version string) bool {
-	switch version {
-	case "3.7.1", "3.7.3", "3.7.4", "2.8.3":
-		return true
-	}
-	return false
+	return version == DesktopProtocolVersion
 }
 
-func (c *Client) android() bool {
-	return c.config.ProtocolVersion == "3.7.3" || c.config.ProtocolVersion == "3.7.4"
+func supportedDesktop(platform string) bool {
+	return platform == "" || platform == "windows" || platform == "macos"
+}
+
+func desktopClient(platform string) string {
+	if platform == "macos" {
+		return "10"
+	}
+	return "11"
 }
 
 func (c *Client) wireVersion() uint64 {
-	switch c.config.ProtocolVersion {
-	case "3.7.4":
-		return 1703240058617
-	case "3.7.3":
-		return 1703240058615
+	if c.mobile {
+		return mobileExchangeVersion
 	}
 	return nativewire.DefaultProtocolVersion
 }
 
 func (c *Client) bodyDigest(plain []byte) uint64 {
-	if c.config.ProtocolVersion == "3.7.4" {
-		low, _ := murmur3.Sum128(plain)
-		return low
+	if c.mobile {
+		return murmur3.Sum64(plain)
 	}
 	if len(plain) == 0 {
 		return 0
@@ -46,13 +52,16 @@ func (c *Client) bodyDigest(plain []byte) uint64 {
 }
 
 func (c *Client) deviceIdentity(public []byte) uint64 {
-	if c.config.ProtocolVersion == "3.7.4" {
-		low, _ := murmur3.Sum128(public)
-		// Match Java Math.abs(long), including the MIN_VALUE overflow case.
-		if int64(low) < 0 {
-			return -low
-		}
-		return low
+	if c.mobile {
+		return javaAbs64(murmur3.Sum64(public))
 	}
 	return xxh3.Hash(public)
+}
+
+func javaAbs64(value uint64) uint64 {
+	// Java Math.abs(long) preserves MIN_VALUE on overflow.
+	if int64(value) < 0 {
+		return -value
+	}
+	return value
 }

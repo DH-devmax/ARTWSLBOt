@@ -2,7 +2,7 @@
   <ElButton :icon="Setting" @click="open">协议配置</ElButton>
   <ElDialog
     v-model="visible"
-    title="原生协议配置"
+    title="桌面端协议配置"
     class="platform-config-dialog"
     align-center
     width="560px"
@@ -10,6 +10,20 @@
     @close="reset"
   >
     <ElAlert v-if="error" :title="error" type="error" :closable="false" />
+    <ElAlert
+      v-if="checked"
+      title="桌面端配置请求验证通过"
+      description="仅验证匿名配置接口；账号登录、心跳和消息收取仍需分别验收。"
+      type="success"
+      :closable="false"
+    />
+    <ElAlert
+      v-if="status.migration_required"
+      title="移动端接入已移除"
+      description="旧配置和会话不能直接转换为桌面端，请导入桌面协议配置后重新登录。"
+      type="warning"
+      :closable="false"
+    />
     <ElDescriptions :column="1" border class="native-info">
       <ElDescriptionsItem label="配置">{{
         status.configured ? '已配置' : '尚未导入'
@@ -19,6 +33,18 @@
       <ElDescriptionsItem label="加密运行库">{{
         status.crypto_ready ? '可用' : '未启用 libsodium 构建'
       }}</ElDescriptionsItem>
+      <ElDescriptionsItem label="业务终端">{{
+        status.device?.desktop_platform === 'macos'
+          ? 'macOS 桌面端（2.8.3）'
+          : 'Windows 桌面端（2.8.3）'
+      }}</ElDescriptionsItem>
+      <ElDescriptionsItem label="业务设备指纹">{{
+        status.device?.business_fingerprint || '无'
+      }}</ElDescriptionsItem>
+      <ElDescriptionsItem label="IM 终端 / 设备指纹"
+        >Web / {{ status.device?.im_fingerprint || '无' }}</ElDescriptionsItem
+      >
+      <ElDescriptionsItem label="手机与机器人同时在线">尚未验收</ElDescriptionsItem>
     </ElDescriptions>
     <ElForm label-position="top" @submit.prevent="save">
       <ElFormItem label="协议配置 JSON">
@@ -55,27 +81,38 @@
       >
     </ElForm>
     <template #footer>
-      <ElButton :disabled="saving" @click="visible = false">关闭</ElButton>
-      <ElButton
-        type="primary"
-        :icon="Upload"
-        :disabled="!configuration"
-        :loading="saving"
-        @click="save"
-        >导入并保存</ElButton
-      >
+      <div class="deployment-actions">
+        <ElButton :disabled="saving" @click="visible = false">关闭</ElButton>
+        <ElButton
+          :icon="Connection"
+          :loading="checking"
+          :disabled="!status.configured || saving || savingIM"
+          @click="check"
+          >验证配置</ElButton
+        >
+        <ElButton
+          type="primary"
+          :icon="Upload"
+          :disabled="!configuration"
+          :loading="saving"
+          @click="save"
+          >导入并保存</ElButton
+        >
+      </div>
     </template>
   </ElDialog>
 </template>
 
 <script setup lang="ts">
   import { ref } from 'vue'
-  import { Setting, Upload } from '@element-plus/icons-vue'
+  import { Connection, Setting, Upload } from '@element-plus/icons-vue'
   import { api, type Row } from './api'
 
   const emit = defineEmits<{ updated: [] }>()
   const visible = ref(false),
     saving = ref(false),
+    checking = ref(false),
+    checked = ref(false),
     error = ref(''),
     configuration = ref(''),
     imKey = ref(''),
@@ -91,6 +128,7 @@
     configuration.value = ''
     imKey.value = ''
     error.value = ''
+    checked.value = false
     if (fileInput.value) fileInput.value.value = ''
   }
   async function open() {
@@ -143,6 +181,24 @@
       saving.value = false
     }
   }
+  async function check() {
+    if (checking.value || saving.value || !status.value.configured) return
+    const current = generation
+    const version = status.value.version
+    checking.value = true
+    checked.value = false
+    error.value = ''
+    try {
+      const result = await api<Row>('/native-deployment/check', 'POST', { version })
+      if (current === generation && version === status.value.version) {
+        checked.value = result.verified === true
+      }
+    } catch (e) {
+      if (current === generation) error.value = (e as Error).message
+    } finally {
+      checking.value = false
+    }
+  }
   async function saveIM() {
     if (savingIM.value || !imKey.value) return
     const current = generation
@@ -171,5 +227,14 @@
   }
   input[type='file'] {
     max-width: 100%;
+  }
+  .deployment-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .deployment-actions :deep(.el-button + .el-button) {
+    margin-left: 0;
   }
 </style>
