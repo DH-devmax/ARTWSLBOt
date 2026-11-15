@@ -8,6 +8,8 @@ from unittest.mock import patch
 
 import yaml
 
+from tools import container_smoke as SMOKE
+
 SPEC = importlib.util.spec_from_file_location("ci_smoke_setup", Path(__file__).with_name("ci_smoke_setup.py"))
 SETUP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SETUP)
@@ -150,6 +152,54 @@ class CISetupTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     SETUP.isolate_fixture_database(path)
             self.assertEqual(path.read_text(), body)
+
+
+class NativeCatalogSmokeTests(unittest.TestCase):
+    def catalog(self):
+        manual = ("account_signup", "signup_sms", "signup_submit", "account_login",
+                  "account_settings", "account_nickname", "account_avatar", "privacy_search",
+                  "privacy_friend", "privacy_invitation", "change_password", "change_phone",
+                  "approve_friend", "accept_friend", "reject_friend", "friend_delete",
+                  "onboarding_friend_request", "read_voice", "read_file")
+        foundation = ("receive_message", "session_restore", "send_text", "read_quote",
+                      "read_recalls", "mute_member", "set_self_card", "send_voice", "send_video")
+        return {"native_usage": {**dict.fromkeys(manual, "manual"),
+                                 **dict.fromkeys(foundation, "foundation"),
+                                 "send_file": "excluded"}, "items": [{"id": "blocked_words"}]}
+
+    def test_frozen_catalog_without_candidate_metadata_is_verified(self):
+        SMOKE.validate_native_consumer_catalog(self.catalog())
+
+    def test_promoted_manual_excluded_or_retired_consumer_is_rejected(self):
+        for capability, replacement in (("privacy_friend", "foundation"),
+                                        ("account_nickname", "foundation"),
+                                        ("send_file", "foundation"), ("send_voice", "excluded")):
+            with self.subTest(capability=capability):
+                catalog = self.catalog()
+                catalog["native_usage"][capability] = replacement
+                with self.assertRaises(RuntimeError):
+                    SMOKE.validate_native_consumer_catalog(catalog)
+        catalog = self.catalog()
+        catalog["items"].append({"id": "friend_approval"})
+        with self.assertRaises(RuntimeError):
+            SMOKE.validate_native_consumer_catalog(catalog)
+
+    def test_missing_or_malformed_consumer_evidence_is_rejected(self):
+        for catalog in (None, {}, {"native_usage": [], "items": []},
+                        {"native_usage": {}, "items": [None]}, {"native_usage": {}, "items": []}):
+            with self.subTest(catalog=catalog):
+                with self.assertRaises(RuntimeError):
+                    SMOKE.validate_native_consumer_catalog(catalog)
+
+    def test_default_smoke_checks_release_contract_not_unpublished_metadata(self):
+        spec = importlib.util.spec_from_file_location(
+            "synthetic_container_smoke", Path(SMOKE.__file__))
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(os.environ, {}, clear=True):
+            spec.loader.exec_module(module)
+        self.assertTrue(module.EXPECT_NATIVE_USAGE)
+        self.assertFalse(module.EXPECT_PRODUCT_SCOPE)
+
 
 if __name__ == "__main__":
     unittest.main()

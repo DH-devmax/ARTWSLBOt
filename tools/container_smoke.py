@@ -24,15 +24,39 @@ WEB_IMAGE = os.environ.get("WSL_SMOKE_WEB_IMAGE", "wsl-web:local")
 GO_IMAGE = os.environ.get("WSL_SMOKE_GO_IMAGE", "wsl-test:ci")
 EXPECT_CHILI_MEDIA = os.environ.get("WSL_SMOKE_EXPECT_CHILI_MEDIA") == "1"
 EXPECT_ASSISTANT_PLATFORMS = os.environ.get("WSL_SMOKE_EXPECT_ASSISTANT_PLATFORMS") == "1"
-EXPECT_PRODUCT_SCOPE = os.environ.get("WSL_SMOKE_EXPECT_PRODUCT_SCOPE", "1") == "1"
+# Optional metadata from the separate, unpublished lightweight candidate.
+EXPECT_PRODUCT_SCOPE = os.environ.get("WSL_SMOKE_EXPECT_PRODUCT_SCOPE") == "1"
 EXPECT_PROJECT_MONITOR = os.environ.get("WSL_SMOKE_EXPECT_PROJECT_MONITOR") == "1"
-EXPECT_NATIVE_USAGE = os.environ.get("WSL_SMOKE_EXPECT_NATIVE_USAGE") == "1"
+EXPECT_NATIVE_USAGE = os.environ.get("WSL_SMOKE_EXPECT_NATIVE_USAGE", "1") == "1"
 EXPECT_CUSTOMER = os.environ.get("WSL_SMOKE_EXPECT_CUSTOMER") == "1"
 EXPECT_OPERATOR = os.environ.get("WSL_SMOKE_EXPECT_OPERATOR") == "1"
 MONITOR_SOAK_SECONDS = int(os.environ.get("WSL_SMOKE_MONITOR_SOAK_SECONDS", "0"))
 PREFIX = "wsl-smoke-" + secrets.token_hex(6)
 CONTAINERS = []
 REDACTIONS = []
+
+
+def validate_native_consumer_catalog(catalog):
+    if not isinstance(catalog, dict):
+        raise RuntimeError("Native consumer catalog is incomplete")
+    usage = catalog.get("native_usage")
+    items = catalog.get("items")
+    if (not isinstance(usage, dict) or not isinstance(items, list)
+            or any(not isinstance(item, dict) or not isinstance(item.get("id"), str)
+                   for item in items)):
+        raise RuntimeError("Native consumer catalog is incomplete")
+    manual = ("account_signup", "signup_sms", "signup_submit", "account_login",
+              "account_settings", "account_nickname", "account_avatar", "privacy_search",
+              "privacy_friend", "privacy_invitation", "change_password", "change_phone",
+              "approve_friend", "accept_friend", "reject_friend", "friend_delete",
+              "onboarding_friend_request", "read_voice", "read_file")
+    foundation = ("receive_message", "session_restore", "send_text", "read_quote",
+                  "read_recalls", "mute_member", "set_self_card", "send_voice", "send_video")
+    if (any(usage.get(key) != "manual" for key in manual)
+            or any(usage.get(key) != "foundation" for key in foundation)
+            or usage.get("send_file") != "excluded"
+            or any(item["id"] == "friend_approval" for item in items)):
+        raise RuntimeError("Native consumer boundary drifted")
 
 
 def docker(*args):
@@ -567,16 +591,7 @@ def main():
             me = session_auth_smoke(opener, base, login, "superadmin")
             for workspace in ("wsl", "lajiaoliao") if EXPECT_NATIVE_USAGE else ():
                 catalog = json_response(opener, base + "/api/v1/features/catalog", workspace=workspace)
-                usage = catalog["native_usage"]
-                for capability in ("signup_sms", "signup_submit", "account_login", "privacy_search",
-                                   "privacy_friend", "privacy_invitation", "change_password",
-                                   "change_phone", "accept_friend", "reject_friend", "read_voice", "read_file"):
-                    if usage.get(capability) != "manual":
-                        raise RuntimeError("Manual capability entered the business foundation")
-                if (usage.get("send_file") != "excluded"
-                        or any(usage.get(key) != "foundation" for key in ("send_voice", "send_video"))
-                        or any(item["id"] == "friend_approval" for item in catalog["items"])):
-                    raise RuntimeError("Native consumer boundary drifted")
+                validate_native_consumer_catalog(catalog)
             for workspace in ("wsl", "lajiaoliao") if EXPECT_PRODUCT_SCOPE else ():
                 catalog = json_response(opener, base + "/api/v1/features/catalog", workspace=workspace)
                 entries = {item["id"]: item for item in

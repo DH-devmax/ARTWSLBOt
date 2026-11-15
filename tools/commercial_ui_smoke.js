@@ -43,9 +43,16 @@ async (page) => {
     await route.fulfill({status,json:{code:0,msg:'',data}})
   }
   await page.route('**/api/v1/**',handler)
+  let navigationSerial=0
   const navigate=async key=>{
-    await page.goto(base+'/#'+key);await page.reload()
-    await page.waitForTimeout(150)
+    await page.evaluate(({actor,admin})=>{
+      sessionStorage.clear()
+      sessionStorage.setItem(`wsl:workspace:${actor}`,'wsl')
+      sessionStorage.setItem(`wsl:console:${actor}`,admin?'admin':'user')
+    },{actor:mode==='admin'?id(8):mode==='member'?id(6):owner.id,admin:mode==='admin'})
+    // A new document lets restore capture this hash before asynchronous identity reads.
+    await page.goto(`${base}/?synthetic-navigation=${++navigationSerial}#${key}`)
+    await page.locator('.platform-shell').waitFor()
   }
   const fits=async(label,width)=>{
     const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1)
