@@ -9,7 +9,7 @@ require (
 	github.com/eino-contrib/jsonschema v1.0.3
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.9.2
-	github.com/klauspost/compress v1.20.3
+	github.com/klauspost/compress v1.20.4
 	github.com/openimsdk/protocol v0.0.73-alpha.17
 	github.com/pierrec/lz4/v4 v4.1.22
 	github.com/shirou/gopsutil/v4 v4.26.9
